@@ -376,54 +376,39 @@ class SolarModel(BaseModel):
 
         ssc = pssc.PySSC()
         wfd = ssc.data_create()
-        new = PVW.default('PVWattsMerchantPlant')
-        PV_MODEL = PVW.new()
-
-        PV_MODEL.assign(
-            {
-                'SolarResource': {
-                    'solar_resource_data': {
-                        'dn': df['DNI'].tolist(),
-                        'df': df['DHI'].tolist(),
-                        'tdry': df['Temperature'].tolist(),
-                        'wspd': df['Wind Speed'].tolist(),
-                        'lat': self.LocationModel.Lat,
-                        'lon': self.LocationModel.Long,
-                        'elev': self.Elevation,
-                        'year': df.Year.to_list(),
-                        'month': df.Month.to_list(),
-                        'day': df.Day.to_list(),
-                        'hour': df.Hour.to_list(),
-                        'minute': (df.Hour * 0).tolist(),
-                    }
-                },
-                'SystemDesign': {
-                    'system_capacity': self.TechnologyModel.Capacity,
-                    'dc_ac_ratio': self.TechnologyModel.DCRatio,
-                    'tilt': 0, # self.TechnologyModel.Tilt,
-                    'azimuth': self.TechnologyModel.Azimuth,
-                    'inv_eff': self.TechnologyModel.InvEff,
-                    'losses': self.TechnologyModel.Losses,
-                    'array_type': ARRAY_MAP[self.TechnologyModel.ArrayType],
-                    'gcr': self.TechnologyModel.GCR,
-                }
-            }
-        )
-
-        ssc.data_set_number(data, b'system_capacity', self.TechnologyModel.Capacity)
-        # Set DC/AC ratio (or power ratio). See https://sam.nrel.gov/sites/default/files/content/virtual_conf_july_2013/07-sam-virtual-conference-2013-woodcock.pdf
-        ssc.data_set_number(data, b'dc_ac_ratio', self.TechnologyModel.DCRatio)
-        ssc.data_set_number(data, b'tilt', self.Tilt)
-        ssc.data_set_number(data, b'azimuth', self.TechnologyModel.Azimuth)
-        ssc.data_set_number(data, b'inv_eff', self.TechnologyModel.InvEff)
-        ssc.data_set_number(data, b'losses', self.TechnologyModel.Losses)
-        # Specify fixed tilt system (0=Fixed, 1=Fixed Roof, 2=1 Axis Tracker, 3=Backtracted, 4=2 Axis Tracker)
-        ssc.data_set_number(data, b'array_type', ARRAY_MAP[self.TechnologyModel.ArrayType])
-        ssc.data_set_number(data, b'gcr', self.TechnologyModel.GCR)
-        ssc.data_set_number(data, b'adjust:constant', 0)
-        ssc.data_set_array(data, b'degradation', [self.TechnologyModel.DegradationRate])
-
-
+        # new = PVW.default('PVWattsMerchantPlant')
+        # PV_MODEL = PVW.new()
+        #
+        # PV_MODEL.assign(
+        #     {
+        #         'SolarResource': {
+        #             'solar_resource_data': {
+        #                 'dn': df['DNI'].tolist(),
+        #                 'df': df['DHI'].tolist(),
+        #                 'tdry': df['Temperature'].tolist(),
+        #                 'wspd': df['Wind Speed'].tolist(),
+        #                 'lat': self.LocationModel.Lat,
+        #                 'lon': self.LocationModel.Long,
+        #                 'elev': self.Elevation,
+        #                 'year': df.Year.to_list(),
+        #                 'month': df.Month.to_list(),
+        #                 'day': df.Day.to_list(),
+        #                 'hour': df.Hour.to_list(),
+        #                 'minute': (df.Hour * 0).tolist(),
+        #             }
+        #         },
+        #         'SystemDesign': {
+        #             'system_capacity': self.TechnologyModel.Capacity,
+        #             'dc_ac_ratio': self.TechnologyModel.DCRatio,
+        #             'tilt': 0, # self.TechnologyModel.Tilt,
+        #             'azimuth': self.TechnologyModel.Azimuth,
+        #             'inv_eff': self.TechnologyModel.InvEff,
+        #             'losses': self.TechnologyModel.Losses,
+        #             'array_type': ARRAY_MAP[self.TechnologyModel.ArrayType],
+        #             'gcr': self.TechnologyModel.GCR,
+        #         }
+        #     }
+        # )
 
         # Initialize the Weather data
         ssc.data_set_number(wfd, b'lat', self.LocationModel.Lat)
@@ -461,9 +446,9 @@ class SolarModel(BaseModel):
         ssc.data_set_array(data, b'degradation', [self.TechnologyModel.DegradationRate])
 
         # Curtailment Informataion
-        ssc.data_set_array_from_csv(data, b'grid_curtailment',b'C:/Users/willk/Downloads/New folder/grid_curtailment.csv')
-        ssc.data_set_number(data, b'enable_interconnection_limit', 0)
-        ssc.data_set_number(data, b'grid_interconnection_limit_kwac', 100000)
+        # ssc.data_set_array_from_csv(data, b'grid_curtailment',b'C:/Users/willk/Downloads/New folder/grid_curtailment.csv')
+        # ssc.data_set_number(data, b'enable_interconnection_limit', 0)
+        # ssc.data_set_number(data, b'grid_interconnection_limit_kwac', 100000)
 
         # Tax Information
         ssc.data_set_number(data, b'inflation_rate', self.FinanceModel.InflationRate)
@@ -751,16 +736,16 @@ class SolarModel(BaseModel):
         ssc.module_free(module)
 
 
-        print(ssc.data_get_number(data, b'lcoe_nom'))
+        # print(ssc.data_get_number(data, b'lcoe_nom'))
 
 
         mws = numpy.array(ssc.data_get_array(data, b'gen'))
-        annual_energy = ssc.data_get_number(data, b'annual_energy')
+        # annual_energy = ssc.data_get_number(data, b'annual_energy')
 
-        # tz = datetime.timezone(datetime.timedelta(hours=int(self.WeatherModel.TimeZone)))
-        # idx = pandas.to_datetime(df[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(tz).dt.tz_convert('US/Central')
-        # df = pandas.DatetimeIndex(idx).shift(freq='1h').to_frame().assign(MW=mws).resample('h').first()[['MW']].interpolate()
-        # df = self.PeriodModel.attributes(df)
+        tz = datetime.timezone(datetime.timedelta(hours=int(self.WeatherModel.TimeZone)))
+        idx = pandas.to_datetime(df[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(tz).dt.tz_convert('US/Central')
+        df = pandas.DatetimeIndex(idx).shift(freq='1h').to_frame().assign(MW=mws).resample('h').first()[['MW']].interpolate()
+        df = self.PeriodModel.attributes(df)
         return df.assign(MW=mws)
 
     def projected(self):
@@ -879,26 +864,26 @@ class Model(BaseModel):
         self.Models = models
         self.update_model(self.Models)
         self.WeatherModel = WeatherModel([self.LocationModel, self.PeriodModel])
-        # self.SolarModel = SolarModel([
-        #     self.LocationModel,
-        #     self.PeriodModel,
-        #     self.MarketModel,
-        #     self.PricingModel,
-        #     self.WeatherModel,
-        #     self.TechnologyModel,
-        #     self.FinanceModel
-        # ])
-        # self.ValueModel = ValueModel([
-        #     self.LocationModel,
-        #     self.TechnologyModel,
-        #     self.SolarModel,
-        #     self.MarketModel,
-        #     self.PricingModel,
-        #     self.FinanceModel,
-        #     self.OperatingCostModel,
-        #     self.CapitalCostModel
-        # ])
-        # self.update_model([self.WeatherModel, self.SolarModel, self.MarketModel, self.ValueModel])
+        self.SolarModel = SolarModel([
+            self.LocationModel,
+            self.PeriodModel,
+            self.MarketModel,
+            self.PricingModel,
+            self.WeatherModel,
+            self.TechnologyModel,
+            self.FinanceModel
+        ])
+        self.ValueModel = ValueModel([
+            self.LocationModel,
+            self.TechnologyModel,
+            self.SolarModel,
+            self.MarketModel,
+            self.PricingModel,
+            self.FinanceModel,
+            self.OperatingCostModel,
+            self.CapitalCostModel
+        ])
+        self.update_model([self.WeatherModel, self.SolarModel, self.MarketModel, self.ValueModel])
 
 
 class Models(BaseModel):
@@ -948,7 +933,7 @@ class RunModel(BaseModel):
         with Pool() as pool:
             self.Models = pool.map(self.build_mode, self.Locations)
         # self.Models = [self.build_mode(i) for i in self.Locations]
-        # self.DF = self.build_dataframe()
+        self.DF = self.build_dataframe()
 
     def build_dataframe(self):
         cols = ['Name', 'FIPS', 'Lat', 'Long', 'Zone', 'LandPrice', 'FairValue', 'AverageDNI', 'AverageDHI', 'AverageMW']
@@ -1127,5 +1112,5 @@ def setup_app(model):
 
 if __name__ == "__main__":
     model = Models()
-    model.RunModel.rebuild()
+    setup_app(model)
 
