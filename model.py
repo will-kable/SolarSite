@@ -62,19 +62,16 @@ class LocationModel(BaseModel):
 
 
 class PeriodModel(BaseModel):
-    def __init__(self, sd, ed, timezone, hist=4):
+    def __init__(self, sd, ed, timezone):
         self.StartDate = sd
         self.EndDate = ed
         self.TimeZone = timezone
         self.Forward = pandas.date_range(sd, ed + datetime.timedelta(days=1), freq='h', tz=self.TimeZone)[1:]
-        self.Historical = pandas.date_range(datetime.date(2020 - hist, 1, 1), datetime.date(2021, 1, 1), freq='h', tz=self.TimeZone)[1:]
         self.ForwardMerge = self.attributes(self.Forward)
-        self.HistoricalMerge = self.attributes(self.Historical)
-
     def __repr__(self):
         return f'{self.__class__.__name__} {self.StartDate} {self.EndDate} {self.TimeZone}'
 
-    def attributes(self, df, cols = None):
+    def attributes(self, df, cols=None):
         if not isinstance(df, pandas.DataFrame):
             df = df.to_frame('index').set_axis(['index'], axis=1)
         hb = df.shift(freq='-1h').index
@@ -313,24 +310,23 @@ class WeatherModel(BaseModel):
 
     def projected(self):
         df = self.Fixed
-        cols = ['GHI', 'DHI', 'DNI', 'Wind Speed', 'Temperature']
-        grp = df.groupby(['Month', 'Hour'])[cols].mean().reset_index()
+        cols = ['GHI', 'DHI', 'DNI', 'Wind Speed', 'Temperature', 'Surface Albedo']
+        grp = df.groupby(['Month', 'HourEnding'])[cols].mean().reset_index()
         fwd = self.PeriodModel.ForwardMerge.merge(grp)
         return fwd.set_index('index').sort_index()
 
     def pull_historical(self):
         lon, lat = self.LocationModel.Long, self.LocationModel.Lat
-        print(self.LocationModel.Name, round(self.LocationModel.Index / 255 * 100, 2))
-
         fetcher = RT.FetchResourceFiles(
             'solar',
             API_KEY_NREL,
             'will.kable@axpo.com',
-            workers=512,
             resource_dir='data\\Weather',
+            workers=512,
             verbose=False,
         )
         fetcher = fetcher.fetch([(lon, lat)])
+
         info = pandas.read_csv(fetcher.resource_file_paths[0], nrows=1)
         timezone, elevation = info['Local Time Zone'], info['Elevation']
         self.TimeZone = timezone[0]
@@ -342,14 +338,15 @@ class WeatherModel(BaseModel):
         )
 
         idx = pandas.to_datetime(df[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(f'Etc/GMT+{-self.TimeZone}').dt.tz_convert('US/Central')
-        df = self.PeriodModel.attributes(df.set_index(idx).shift(freq='1h')).sort_index()
+        df = df.set_index(idx).sort_index().shift(freq='1h')
+        df = self.PeriodModel.attributes(df).sort_index()
         return df
+
 
 class SolarModel(BaseModel):
     def __init__(self, models):
         self.update_model(models, False)
-        self.Tilt = self.optiminal_angle()
-        # self.Fixed = self.simulate()
+        self.Tilt = self.optimal_angle()
         self.Unfixed = self.simulate()
         self.CapacityFactor = self.Unfixed.MW.sum() / self.Unfixed.MW.count() / self.TechnologyModel.Capacity
         self.HourlyProfile = self.Unfixed.groupby(['Month', 'HourEnding'])['MW'].sum().unstack()
@@ -358,7 +355,7 @@ class SolarModel(BaseModel):
     def __repr__(self):
         return self.__class__.__name__ + ' ' + self.LocationModel.Name
 
-    def optiminal_angle(self):
+    def optimal_angle(self):
         lat, lon = self.LocationModel.Lat, self.LocationModel.Long
         if os.path.exists(f'data/Angles/{lon}_{lat}.csv'):
             return pandas.read_csv(f'data/Angles/{lon}_{lat}.csv', names=[0], skiprows=1).iloc[0, 0]
@@ -377,372 +374,43 @@ class SolarModel(BaseModel):
 
         PV_MODEL.assign(
             {
-                'SolarResource': {
-                    'solar_resource_data': {
-                        'dn': df['DNI'].tolist(),
-                        'df': df['DHI'].tolist(),
-                        'tdry': df['Temperature'].tolist(),
-                        'wspd': df['Wind Speed'].tolist(),
-                        'lat': self.LocationModel.Lat,
-                        'lon': self.LocationModel.Long,
-                        'elev': self.WeatherModel.Elevation,
-                        'year': df.Year.to_list(),
-                        'month': df.Month.to_list(),
-                        'day': df.Day.to_list(),
-                        'hour': df.Hour.to_list(),
-                        'minute': (df.Hour * 0).tolist(),
-                    }
-                },
                 'SystemDesign': {
                     'system_capacity': self.TechnologyModel.Capacity,
                     'dc_ac_ratio': self.TechnologyModel.DCRatio,
-                    'tilt': 0, # self.TechnologyModel.Tilt,
+                    'tilt': self.Tilt,
                     'azimuth': self.TechnologyModel.Azimuth,
                     'inv_eff': self.TechnologyModel.InvEff,
                     'losses': self.TechnologyModel.Losses,
                     'array_type': ARRAY_MAP[self.TechnologyModel.ArrayType],
                     'gcr': self.TechnologyModel.GCR,
-                }
+                },
+                'SolarResource': {
+                    'solar_resource_data': {
+                        'lat': self.LocationModel.Lat,
+                        'lon': self.LocationModel.Long,
+                        'elev': self.WeatherModel.Elevation,
+                        'tz': -6,
+                        'dn': tuple(df['DNI']),
+                        'df': tuple(df['DHI']),
+                        'gh': tuple(df['GHI']),
+                        'tdry': tuple(df['Temperature']),
+                        'wspd': tuple(df['Wind Speed']),
+                        'year': tuple(df.Year - 20),
+                        'month': tuple(df.Month),
+                        'day': tuple(df.Day),
+                        'hour': tuple(df.Hour),
+                        'minute': tuple(df.Hour * 0),
+                        'albedo': tuple(df['Surface Albedo']),
+                        'use_wf_albedo': 1,
+                    }
+                },
             }
         )
-
-        # Initialize the Weather data
-        ssc.data_set_number(wfd, b'lat', self.LocationModel.Lat)
-        ssc.data_set_number(wfd, b'lon', self.LocationModel.Long)
-        ssc.data_set_number(wfd, b'tz', self.WeatherModel.TimeZone)
-        ssc.data_set_number(wfd, b'elev', self.WeatherModel.Elevation)
-        ssc.data_set_array(wfd, b'year', df.Year.to_list())
-        ssc.data_set_array(wfd, b'month', df.Month.to_list())
-        ssc.data_set_array(wfd, b'day', df.Day.to_list())
-        ssc.data_set_array(wfd, b'hour', df.Hour.to_list())
-        ssc.data_set_array(wfd, b'minute', df.Hour * 0)
-        ssc.data_set_array(wfd, b'dn', df['DNI'].to_list())
-        ssc.data_set_array(wfd, b'df', df['DHI'].to_list())
-        ssc.data_set_array(wfd, b'wspd', df['Wind Speed'].to_list())
-        ssc.data_set_array(wfd, b'tdry', df['Temperature'].to_list())
-
-        data = ssc.data_create()
-        ssc.data_set_number(data, b'system_use_lifetime_output', 0)
-        ssc.data_set_table(data, b'solar_resource_data', wfd)
-
-        # Initialize the Technology data
-        # Specify the system Configuration
-        # Set system capacity in MW
-        ssc.data_set_number(data, b'system_capacity', self.TechnologyModel.Capacity)
-        # Set DC/AC ratio (or power ratio). See https://sam.nrel.gov/sites/default/files/content/virtual_conf_july_2013/07-sam-virtual-conference-2013-woodcock.pdf
-        ssc.data_set_number(data, b'dc_ac_ratio', self.TechnologyModel.DCRatio)
-        ssc.data_set_number(data, b'tilt', self.Tilt)
-        ssc.data_set_number(data, b'azimuth', self.TechnologyModel.Azimuth)
-        ssc.data_set_number(data, b'inv_eff', self.TechnologyModel.InvEff)
-        ssc.data_set_number(data, b'losses', self.TechnologyModel.Losses)
-        # Specify fixed tilt system (0=Fixed, 1=Fixed Roof, 2=1 Axis Tracker, 3=Backtracted, 4=2 Axis Tracker)
-        ssc.data_set_number(data, b'array_type', ARRAY_MAP[self.TechnologyModel.ArrayType])
-        ssc.data_set_number(data, b'gcr', self.TechnologyModel.GCR)
-        ssc.data_set_number(data, b'adjust:constant', 0)
-        ssc.data_set_array(data, b'degradation', [self.TechnologyModel.DegradationRate])
-
-        # Curtailment Informataion
-        # ssc.data_set_array_from_csv(data, b'grid_curtailment',b'C:/Users/willk/Downloads/New folder/grid_curtailment.csv')
-        # ssc.data_set_number(data, b'enable_interconnection_limit', 0)
-        # ssc.data_set_number(data, b'grid_interconnection_limit_kwac', 100000)
-
-        # Tax Information
-        ssc.data_set_number(data, b'inflation_rate', self.FinanceModel.InflationRate)
-        ssc.data_set_array(data, b'federal_tax_rate', [self.FinanceModel.FederalTaxRate])
-        ssc.data_set_array(data, b'state_tax_rate', [self.FinanceModel.StateTaxRate])
-        ssc.data_set_number(data, b'property_tax_rate', 0)
-        ssc.data_set_number(data, b'prop_tax_cost_assessed_percent', 100)
-        ssc.data_set_number(data, b'prop_tax_assessed_decline', 0)
-        ssc.data_set_number(data, b'real_discount_rate', 6.4000000000000004)
-        ssc.data_set_number(data, b'insurance_rate', 0)
-
-        # Cost Information
-        om_fixed = [0]
-        ssc.data_set_array(data, b'om_fixed', om_fixed)
-        ssc.data_set_number(data, b'om_fixed_escal', 0)
-        om_production = [0]
-        ssc.data_set_array(data, b'om_production', om_production)
-        ssc.data_set_number(data, b'om_production_escal', 0)
-        om_capacity = [15]
-        ssc.data_set_array(data, b'om_capacity', om_capacity)
-        ssc.data_set_number(data, b'om_capacity_escal', 0)
-        ssc.data_set_number(data, b'land_area', 650.27774620322919)
-        om_land_lease = [0]
-        ssc.data_set_array(data, b'om_land_lease', om_land_lease)
-        ssc.data_set_number(data, b'om_land_lease_escal', 0)
-        ssc.data_set_number(data, b'reserves_interest', 1.75)
-        ssc.data_set_number(data, b'equip1_reserve_cost', 0.10000000000000001)
-        ssc.data_set_number(data, b'equip1_reserve_freq', 15)
-        ssc.data_set_number(data, b'equip2_reserve_cost', 0)
-        ssc.data_set_number(data, b'equip2_reserve_freq', 15)
-        ssc.data_set_number(data, b'equip3_reserve_cost', 0)
-        ssc.data_set_number(data, b'equip3_reserve_freq', 3)
-        ssc.data_set_number(data, b'equip_reserve_depr_sta', 0)
-        ssc.data_set_number(data, b'equip_reserve_depr_fed', 0)
-
-        # Incentive Information
-        itc_fed_amount = [0]
-        ssc.data_set_array(data, b'itc_fed_amount', itc_fed_amount)
-        ssc.data_set_number(data, b'itc_fed_amount_deprbas_fed', 1)
-        ssc.data_set_number(data, b'itc_fed_amount_deprbas_sta', 1)
-        itc_sta_amount = [0]
-        ssc.data_set_array(data, b'itc_sta_amount', itc_sta_amount)
-        ssc.data_set_number(data, b'itc_sta_amount_deprbas_fed', 0)
-        ssc.data_set_number(data, b'itc_sta_amount_deprbas_sta', 0)
-        itc_fed_percent = [21]
-        ssc.data_set_array(data, b'itc_fed_percent', itc_fed_percent)
-        itc_fed_percent_maxvalue = [9.9999999999999998e+37]
-        ssc.data_set_array(data, b'itc_fed_percent_maxvalue', itc_fed_percent_maxvalue)
-        ssc.data_set_number(data, b'itc_fed_percent_deprbas_fed', 1)
-        ssc.data_set_number(data, b'itc_fed_percent_deprbas_sta', 1)
-        itc_sta_percent = [0]
-        ssc.data_set_array(data, b'itc_sta_percent', itc_sta_percent)
-        itc_sta_percent_maxvalue = [9.9999999999999998e+37]
-        ssc.data_set_array(data, b'itc_sta_percent_maxvalue', itc_sta_percent_maxvalue)
-        ssc.data_set_number(data, b'itc_sta_percent_deprbas_fed', 0)
-        ssc.data_set_number(data, b'itc_sta_percent_deprbas_sta', 0)
-        ssc.data_set_array(data, b'ptc_fed_amount', [self.MarketModel.FederalPTC])
-        ssc.data_set_number(data, b'ptc_fed_term', 10)
-        ssc.data_set_number(data, b'ptc_fed_escal', 2.5)
-        ssc.data_set_array(data, b'ptc_sta_amount', [self.MarketModel.StatePTC])
-        ssc.data_set_number(data, b'ptc_sta_term', 10)
-        ssc.data_set_number(data, b'ptc_sta_escal', 0)
-
-
-        # Deperciation Information
-        ssc.data_set_number(data, b'depr_alloc_macrs_5_percent', 90)
-        ssc.data_set_number(data, b'depr_alloc_macrs_15_percent', 1.5)
-        ssc.data_set_number(data, b'depr_alloc_sl_5_percent', 0)
-        ssc.data_set_number(data, b'depr_alloc_sl_15_percent', 2.5)
-        ssc.data_set_number(data, b'depr_alloc_sl_20_percent', 3)
-        ssc.data_set_number(data, b'depr_alloc_sl_39_percent', 0)
-        ssc.data_set_number(data, b'depr_alloc_custom_percent', 0)
-        depr_custom_schedule = [0]
-        ssc.data_set_array(data, b'depr_custom_schedule', depr_custom_schedule)
-        ssc.data_set_number(data, b'depr_bonus_sta', 0)
-        ssc.data_set_number(data, b'depr_bonus_sta_macrs_5', 1)
-        ssc.data_set_number(data, b'depr_bonus_sta_macrs_15', 1)
-        ssc.data_set_number(data, b'depr_bonus_sta_sl_5', 0)
-        ssc.data_set_number(data, b'depr_bonus_sta_sl_15', 0)
-        ssc.data_set_number(data, b'depr_bonus_sta_sl_20', 0)
-        ssc.data_set_number(data, b'depr_bonus_sta_sl_39', 0)
-        ssc.data_set_number(data, b'depr_bonus_sta_custom', 0)
-        ssc.data_set_number(data, b'depr_bonus_fed', 0)
-        ssc.data_set_number(data, b'depr_bonus_fed_macrs_5', 1)
-        ssc.data_set_number(data, b'depr_bonus_fed_macrs_15', 1)
-        ssc.data_set_number(data, b'depr_bonus_fed_sl_5', 0)
-        ssc.data_set_number(data, b'depr_bonus_fed_sl_15', 0)
-        ssc.data_set_number(data, b'depr_bonus_fed_sl_20', 0)
-        ssc.data_set_number(data, b'depr_bonus_fed_sl_39', 0)
-        ssc.data_set_number(data, b'depr_bonus_fed_custom', 0)
-        ssc.data_set_number(data, b'depr_itc_sta_macrs_5', 1)
-        ssc.data_set_number(data, b'depr_itc_sta_macrs_15', 0)
-        ssc.data_set_number(data, b'depr_itc_sta_sl_5', 0)
-        ssc.data_set_number(data, b'depr_itc_sta_sl_15', 0)
-        ssc.data_set_number(data, b'depr_itc_sta_sl_20', 0)
-        ssc.data_set_number(data, b'depr_itc_sta_sl_39', 0)
-        ssc.data_set_number(data, b'depr_itc_sta_custom', 0)
-        ssc.data_set_number(data, b'depr_itc_fed_macrs_5', 1)
-        ssc.data_set_number(data, b'depr_itc_fed_macrs_15', 0)
-        ssc.data_set_number(data, b'depr_itc_fed_sl_5', 0)
-        ssc.data_set_number(data, b'depr_itc_fed_sl_15', 0)
-        ssc.data_set_number(data, b'depr_itc_fed_sl_20', 0)
-        ssc.data_set_number(data, b'depr_itc_fed_sl_39', 0)
-        ssc.data_set_number(data, b'depr_itc_fed_custom', 0)
-        ssc.data_set_number(data, b'ibi_fed_amount', 0)
-        ssc.data_set_number(data, b'ibi_fed_amount_tax_fed', 1)
-        ssc.data_set_number(data, b'ibi_fed_amount_tax_sta', 1)
-        ssc.data_set_number(data, b'ibi_fed_amount_deprbas_fed', 0)
-        ssc.data_set_number(data, b'ibi_fed_amount_deprbas_sta', 0)
-        ssc.data_set_number(data, b'ibi_sta_amount', 0)
-        ssc.data_set_number(data, b'ibi_sta_amount_tax_fed', 1)
-        ssc.data_set_number(data, b'ibi_sta_amount_tax_sta', 1)
-        ssc.data_set_number(data, b'ibi_sta_amount_deprbas_fed', 0)
-        ssc.data_set_number(data, b'ibi_sta_amount_deprbas_sta', 0)
-        ssc.data_set_number(data, b'ibi_uti_amount', 0)
-        ssc.data_set_number(data, b'ibi_uti_amount_tax_fed', 1)
-        ssc.data_set_number(data, b'ibi_uti_amount_tax_sta', 1)
-        ssc.data_set_number(data, b'ibi_uti_amount_deprbas_fed', 0)
-        ssc.data_set_number(data, b'ibi_uti_amount_deprbas_sta', 0)
-        ssc.data_set_number(data, b'ibi_oth_amount', 0)
-        ssc.data_set_number(data, b'ibi_oth_amount_tax_fed', 1)
-        ssc.data_set_number(data, b'ibi_oth_amount_tax_sta', 1)
-        ssc.data_set_number(data, b'ibi_oth_amount_deprbas_fed', 0)
-        ssc.data_set_number(data, b'ibi_oth_amount_deprbas_sta', 0)
-        ssc.data_set_number(data, b'ibi_fed_percent', 0)
-        ssc.data_set_number(data, b'ibi_fed_percent_maxvalue', 9.9999999999999998e+37)
-        ssc.data_set_number(data, b'ibi_fed_percent_tax_fed', 1)
-        ssc.data_set_number(data, b'ibi_fed_percent_tax_sta', 1)
-        ssc.data_set_number(data, b'ibi_fed_percent_deprbas_fed', 0)
-        ssc.data_set_number(data, b'ibi_fed_percent_deprbas_sta', 0)
-        ssc.data_set_number(data, b'ibi_sta_percent', 0)
-        ssc.data_set_number(data, b'ibi_sta_percent_maxvalue', 9.9999999999999998e+37)
-        ssc.data_set_number(data, b'ibi_sta_percent_tax_fed', 1)
-        ssc.data_set_number(data, b'ibi_sta_percent_tax_sta', 1)
-        ssc.data_set_number(data, b'ibi_sta_percent_deprbas_fed', 0)
-        ssc.data_set_number(data, b'ibi_sta_percent_deprbas_sta', 0)
-        ssc.data_set_number(data, b'ibi_uti_percent', 0)
-        ssc.data_set_number(data, b'ibi_uti_percent_maxvalue', 9.9999999999999998e+37)
-        ssc.data_set_number(data, b'ibi_uti_percent_tax_fed', 1)
-        ssc.data_set_number(data, b'ibi_uti_percent_tax_sta', 1)
-        ssc.data_set_number(data, b'ibi_uti_percent_deprbas_fed', 0)
-        ssc.data_set_number(data, b'ibi_uti_percent_deprbas_sta', 0)
-        ssc.data_set_number(data, b'ibi_oth_percent', 0)
-        ssc.data_set_number(data, b'ibi_oth_percent_maxvalue', 9.9999999999999998e+37)
-        ssc.data_set_number(data, b'ibi_oth_percent_tax_fed', 1)
-        ssc.data_set_number(data, b'ibi_oth_percent_tax_sta', 1)
-        ssc.data_set_number(data, b'ibi_oth_percent_deprbas_fed', 0)
-        ssc.data_set_number(data, b'ibi_oth_percent_deprbas_sta', 0)
-        ssc.data_set_number(data, b'cbi_fed_amount', 0)
-        ssc.data_set_number(data, b'cbi_fed_maxvalue', 9.9999999999999998e+37)
-        ssc.data_set_number(data, b'cbi_fed_tax_fed', 0)
-        ssc.data_set_number(data, b'cbi_fed_tax_sta', 0)
-        ssc.data_set_number(data, b'cbi_fed_deprbas_fed', 0)
-        ssc.data_set_number(data, b'cbi_fed_deprbas_sta', 0)
-        ssc.data_set_number(data, b'cbi_sta_amount', 0)
-        ssc.data_set_number(data, b'cbi_sta_maxvalue', 9.9999999999999998e+37)
-        ssc.data_set_number(data, b'cbi_sta_tax_fed', 0)
-        ssc.data_set_number(data, b'cbi_sta_tax_sta', 0)
-        ssc.data_set_number(data, b'cbi_sta_deprbas_fed', 0)
-        ssc.data_set_number(data, b'cbi_sta_deprbas_sta', 0)
-        ssc.data_set_number(data, b'cbi_uti_amount', 0)
-        ssc.data_set_number(data, b'cbi_uti_maxvalue', 9.9999999999999998e+37)
-        ssc.data_set_number(data, b'cbi_uti_tax_fed', 0)
-        ssc.data_set_number(data, b'cbi_uti_tax_sta', 0)
-        ssc.data_set_number(data, b'cbi_uti_deprbas_fed', 0)
-        ssc.data_set_number(data, b'cbi_uti_deprbas_sta', 0)
-        ssc.data_set_number(data, b'cbi_oth_amount', 0)
-        ssc.data_set_number(data, b'cbi_oth_maxvalue', 9.9999999999999998e+37)
-        ssc.data_set_number(data, b'cbi_oth_tax_fed', 0)
-        ssc.data_set_number(data, b'cbi_oth_tax_sta', 0)
-        ssc.data_set_number(data, b'cbi_oth_deprbas_fed', 0)
-        ssc.data_set_number(data, b'cbi_oth_deprbas_sta', 0)
-        pbi_fed_amount = [0]
-        ssc.data_set_array(data, b'pbi_fed_amount', pbi_fed_amount)
-        ssc.data_set_number(data, b'pbi_fed_term', 0)
-        ssc.data_set_number(data, b'pbi_fed_escal', 0)
-        ssc.data_set_number(data, b'pbi_fed_tax_fed', 1)
-        ssc.data_set_number(data, b'pbi_fed_tax_sta', 1)
-        pbi_sta_amount = [0]
-        ssc.data_set_array(data, b'pbi_sta_amount', pbi_sta_amount)
-        ssc.data_set_number(data, b'pbi_sta_term', 0)
-        ssc.data_set_number(data, b'pbi_sta_escal', 0)
-        ssc.data_set_number(data, b'pbi_sta_tax_fed', 1)
-        ssc.data_set_number(data, b'pbi_sta_tax_sta', 1)
-        pbi_uti_amount = [0]
-        ssc.data_set_array(data, b'pbi_uti_amount', pbi_uti_amount)
-        ssc.data_set_number(data, b'pbi_uti_term', 0)
-        ssc.data_set_number(data, b'pbi_uti_escal', 0)
-        ssc.data_set_number(data, b'pbi_uti_tax_fed', 1)
-        ssc.data_set_number(data, b'pbi_uti_tax_sta', 1)
-        pbi_oth_amount = [0]
-        ssc.data_set_array(data, b'pbi_oth_amount', pbi_oth_amount)
-        ssc.data_set_number(data, b'pbi_oth_term', 0)
-        ssc.data_set_number(data, b'pbi_oth_escal', 0)
-        ssc.data_set_number(data, b'pbi_oth_tax_fed', 1)
-        ssc.data_set_number(data, b'pbi_oth_tax_sta', 1)
-        ssc.data_set_number(data, b'term_tenor', 18)
-        ssc.data_set_number(data, b'term_int_rate', 7)
-        ssc.data_set_number(data, b'dscr', 1.3)
-        ssc.data_set_number(data, b'dscr_limit_debt_fraction', 0)
-        ssc.data_set_number(data, b'dscr_maximum_debt_fraction', 100)
-        ssc.data_set_number(data, b'dscr_reserve_months', 6)
-        ssc.data_set_number(data, b'debt_percent', 60)
-        ssc.data_set_number(data, b'debt_option', 1)
-        ssc.data_set_number(data, b'payment_option', 0)
-        ssc.data_set_number(data, b'cost_debt_closing', 0)
-        ssc.data_set_number(data, b'cost_debt_fee', 2.75)
-        ssc.data_set_number(data, b'months_working_reserve', 6)
-        ssc.data_set_number(data, b'months_receivables_reserve', 0)
-        ssc.data_set_number(data, b'cost_other_financing', 0)
-        ssc.data_set_number(data, b'pbi_fed_for_ds', 0)
-        ssc.data_set_number(data, b'pbi_sta_for_ds', 0)
-        ssc.data_set_number(data, b'pbi_uti_for_ds', 0)
-        ssc.data_set_number(data, b'pbi_oth_for_ds', 0)
-        ssc.data_set_number(data, b'loan_moratorium', 0)
-        ssc.data_set_number(data, b'total_installed_cost', 116394500)
-        ssc.data_set_number(data, b'salvage_percentage', 0)
-        ssc.data_set_number(data, b'batt_salvage_percentage', 0)
-        ssc.data_set_number(data, b'construction_financing_cost', 3055355.625)
-        ssc.data_set_number(data, b'depr_stabas_method', 1)
-        ssc.data_set_number(data, b'depr_fedbas_method', 1)
-
-        # Revenue Information
-        ssc.data_set_number(data, b'mp_enable_energy_market_revenue', 1)
-        mp_energy_market_revenue = [[0, 0]]
-        ssc.data_set_matrix(data, b'mp_energy_market_revenue', mp_energy_market_revenue)
-        ssc.data_set_number(data, b'mp_enable_ancserv1', 0)
-        mp_ancserv1_revenue = [[0, 0]]
-        ssc.data_set_matrix(data, b'mp_ancserv1_revenue', mp_ancserv1_revenue)
-        ssc.data_set_number(data, b'mp_enable_ancserv2', 0)
-        mp_ancserv2_revenue = [[0, 0]]
-        ssc.data_set_matrix(data, b'mp_ancserv2_revenue', mp_ancserv2_revenue)
-        ssc.data_set_number(data, b'mp_enable_ancserv3', 0)
-        mp_ancserv3_revenue = [[0, 0]]
-        ssc.data_set_matrix(data, b'mp_ancserv3_revenue', mp_ancserv3_revenue)
-        ssc.data_set_number(data, b'mp_enable_ancserv4', 0)
-        mp_ancserv4_revenue = [[0, 0]]
-        ssc.data_set_matrix(data, b'mp_ancserv4_revenue', mp_ancserv4_revenue)
-
-        ssc.data_set_array(data, b'mp_energy_market_revenue_single', self.PricingModel.Unfixed.tolist())
-        # ssc.data_set_matrix_from_csv(data, b'mp_energy_market_revenue_single', b'C:/Users/willk/Downloads/New folder/mp_energy_market_revenue_single.csv')
-        mp_ancserv1_revenue_single = [[0]]
-        ssc.data_set_matrix(data, b'mp_ancserv1_revenue_single', mp_ancserv1_revenue_single)
-        mp_ancserv2_revenue_single = [[0]]
-        ssc.data_set_matrix(data, b'mp_ancserv2_revenue_single', mp_ancserv2_revenue_single)
-        mp_ancserv3_revenue_single = [[0]]
-        ssc.data_set_matrix(data, b'mp_ancserv3_revenue_single', mp_ancserv3_revenue_single)
-        mp_ancserv4_revenue_single = [[0]]
-        ssc.data_set_matrix(data, b'mp_ancserv4_revenue_single', mp_ancserv4_revenue_single)
-        ssc.data_set_number(data, b'mp_enable_market_percent_gen', 1)
-        ssc.data_set_number(data, b'mp_enable_ancserv1_percent_gen', 0)
-        ssc.data_set_number(data, b'mp_enable_ancserv2_percent_gen', 0)
-        ssc.data_set_number(data, b'mp_enable_ancserv3_percent_gen', 0)
-        ssc.data_set_number(data, b'mp_enable_ancserv4_percent_gen', 0)
-        ssc.data_set_number(data, b'mp_market_percent_gen', 100)
-        ssc.data_set_number(data, b'mp_ancserv1_percent_gen', 0)
-        ssc.data_set_number(data, b'mp_ancserv2_percent_gen', 0)
-        ssc.data_set_number(data, b'mp_ancserv3_percent_gen', 0)
-        ssc.data_set_number(data, b'mp_ancserv4_percent_gen', 0)
-        ssc.data_set_number(data, b'cp_capacity_payment_esc', 0)
-        ssc.data_set_number(data, b'cp_capacity_payment_type', 0)
-        ssc.data_set_array(data, b'cp_capacity_payment_amount', [0])
-        ssc.data_set_array(data, b'cp_capacity_credit_percent', [0])
-        ssc.data_set_number(data, b'cp_system_nameplate', self.TechnologyModel.Capacity)
-        ssc.data_set_number(data, b'cp_battery_nameplate', 0)
-        module = ssc.module_create(b'pvwattsv8')
-        ssc.module_exec_set_print(0)
-        ssc.module_exec(module, data)
-        ssc.module_free(module)
-
-        module = ssc.module_create(b'grid')
-        ssc.module_exec_set_print(0)
-        ssc.module_exec(module, data)
-        ssc.module_free(module)
-
-        module = ssc.module_create(b'utilityrate5')
-        ssc.module_exec_set_print(0)
-        ssc.module_exec(module, data)
-        ssc.module_free(module)
-
-
-        module = ssc.module_create(b'merchantplant')
-        ssc.module_exec_set_print(0)
-        ssc.module_exec(module, data)
-        ssc.module_free(module)
-
-
-        # print(ssc.data_get_number(data, b'lcoe_nom'))
-
-
-        mws = numpy.array(ssc.data_get_array(data, b'gen'))
-        # annual_energy = ssc.data_get_number(data, b'annual_energy')
-
-        tz = datetime.timezone(datetime.timedelta(hours=int(self.WeatherModel.TimeZone)))
-        idx = pandas.to_datetime(df[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(tz).dt.tz_convert('US/Central')
-        df = pandas.DatetimeIndex(idx).shift(freq='1h').to_frame().assign(MW=mws).resample('h').first()[['MW']].interpolate()
-        df = self.PeriodModel.attributes(df)
-        return df.assign(MW=mws)
+        PV_MODEL.execute()
+        out = PV_MODEL.Outputs.export()
+        mws = numpy.array(out['gen'])
+        df = df.assign(MW=mws)
+        return
 
     def projected(self):
         grp = self.Fixed.groupby(['Month', 'HourEnding'])['MW'].mean().reset_index()
@@ -780,7 +448,6 @@ class PricingModel(BaseModel):
         return json.loads(open(f'data/Prices/Scalars/{self.Zone}_scalars.json').read())
 
     def datacurves(self):
-        d1 = datetime.datetime.now()
         fwds = self.Forwards
         fwds_merge1 = fwds.reset_index().melt(id_vars='index').set_axis(['Date', 'TimeShape', 'Price'], axis=1).dropna()
         fwds_merge2 = fwds.reset_index().melt(id_vars='index').set_axis(['DateMonth', 'TimeShape', 'Price'], axis=1).dropna()
@@ -806,8 +473,6 @@ class PricingModel(BaseModel):
             return idx * scalars[shape]
 
         fwds_curve = mrg.groupby(['Date', 'TimeShape'])['Price'].transform(map_forward, *[scalars]).set_axis(mrg['index'])
-        d2 = datetime.datetime.now()
-        # print((d2 - d1).seconds)
         return fwds_curve
 
 
@@ -926,9 +591,9 @@ class RunModel(BaseModel):
     def rebuild(self):
         self.PeriodModel = PeriodModel(self.FinanceModel.StartDate, self.FinanceModel.EndDate, 'US/Central')
         self.PricingModels = {i: PricingModel(i, [self.PeriodModel, self.DiscountModel, self.MarketModel]) for i in self.Zones}
-        # with Pool() as pool:
-        #     self.Models = pool.map(self.build_mode, self.Locations)
-        self.Models = [self.build_mode(i) for i in self.Locations]
+        with Pool() as pool:
+            self.Models = pool.map(self.build_mode, self.Locations)
+        # self.Models = [self.build_mode(i) for i in self.Locations]
         # self.DF = self.build_dataframe()
 
     def build_dataframe(self):
@@ -1013,7 +678,7 @@ def setup_app(model):
 
                         html.Div(
                             [
-                                dcc.Graph(id={'type': 'x-graph', 'name': model_name}, animate=True),
+                                dcc.Graph(id={'type': 'x-graph', 'name': model_name}),
                             ], style={'width': '49%', 'display': 'inline-block'}
                         ),
 
@@ -1108,6 +773,6 @@ def setup_app(model):
 
 if __name__ == "__main__":
     model = Models()
-#    setup_app(model)
+    # setup_app(model)
     model.RunModel.rebuild()
-    self = model.RunModel.Models[0].WeatherModel
+    self = model.RunModel.Models[0].SolarModel

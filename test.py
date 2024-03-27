@@ -1,19 +1,36 @@
-from urllib.request import urlopen
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Mar  4 13:47:58 2020
+
+Most recently tested against PySAM 5.1.0
+
+@author: frohro
+"""
 import json
-with urlopen('https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json') as response:
-    counties = json.load(response)
+import PySAM.GenericSystem as GenericSystem
+import PySAM.Grid as Grid
+import PySAM.Singleowner as Singleowner
+import PySAM.PySSC as pssc
 
-import pandas as pd
-df = pd.read_csv("https://raw.githubusercontent.com/plotly/datasets/master/fips-unemp-16.csv",
-                   dtype={"fips": str}).iloc[:100]
+ssc = pssc.PySSC()
+with open("C:\\Users\\WILLKABL\\PycharmProjects\\SolarSite\\data\\Examples\\100kW_PVWatts.json") as f:
+    dic = json.load(f)
+    gs_dat = pssc.dict_to_ssc_table(dic, "generic_system")
+    grid_dat = pssc.dict_to_ssc_table(dic, "grid")
+    so_dat = pssc.dict_to_ssc_table(dic, "singleowner")
 
-import plotly.express as px
-
-fig = px.choropleth(df, geojson=counties, locations='fips', color='unemp',
-                           color_continuous_scale="Viridis",
-                           range_color=(0, 12),
-                           scope="usa",
-                           labels={'unemp':'unemployment rate'}
-                          )
-fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
-fig.show()
+#     gs = GenericSystem.wrap(gs_dat)
+#     grid = Grid.from_existing(gs)
+#     grid.assign(Grid.wrap(grid_dat).export())
+#
+#     # to create GenericSystem and Singleowner combined simulation, sharing the same data
+#     so = Singleowner.from_existing(gs)
+#     so.assign(Singleowner.wrap(so_dat).export())
+#
+#
+# gs.execute()
+# grid.execute()
+# so.execute()
+# print('Made it past execute.')
+# print(gs.Outputs.export())  # as dictionary
