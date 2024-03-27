@@ -8,6 +8,7 @@ import PySAM.Pvwattsv8 as PVW
 import PySAM.Merchantplant as MERC
 import PySAM.Utilityrate5 as UTL
 import PySAM.Grid as GRID
+import PySAM.ResourceTools as RT
 
 import matplotlib.pyplot as plt
 import numpy
@@ -299,12 +300,10 @@ class DiscountModel(BaseModel):
 
 
 class WeatherModel(BaseModel):
-    def __init__(self, models, hist=5):
+    def __init__(self, models):
         self.Models = models
         self.update_model(self.Models)
-        self.TimeZone = self.LocationModel.TimeZone
-        self.Elevation = 0
-        self.Fixed = pandas.concat([self.pull_historical(year) for year in range(2020 - hist, 2020)])
+        self.Fixed = self.pull_historical()
         self.AverageDNI = self.Fixed['DNI'].mean()
         self.AverageDHI = self.Fixed['DHI'].mean()
         self.Unfixed = self.projected()
@@ -319,35 +318,32 @@ class WeatherModel(BaseModel):
         fwd = self.PeriodModel.ForwardMerge.merge(grp)
         return fwd.set_index('index').sort_index()
 
-    def pull_historical(self, year):
+    def pull_historical(self):
         lon, lat = self.LocationModel.Long, self.LocationModel.Lat
-        if os.path.exists(f'data/Weather/{lon}_{lat}_{year}.csv'):
-            df = pandas.read_csv(f'data/Weather/{lon}_{lat}_{year}.csv')
-            self.TimeZone, self.Elevation = df.loc[0, 'TimeZone'], df.loc[0, 'Elevation']
-            return df
-        print(self.LocationModel.Name, year, round(self.LocationModel.Index / 255 * 100, 2))
-        attributes = 'ghi,dhi,dni,wind_speed,air_temperature,solar_zenith_angle'
-        BASE_URL = 'https://developer.nrel.gov/api/nsrdb/v2/solar/psm3-download.csv?'
-        dct = {
-            'wkt': f'POINT({lon}%20{lat})',
-            'years': year,
-            'leap_day': 'false',
-            'interval': '60',
-            'utc': 'true',
-            'api_key': API_KEY_NREL,
-            'attributes': attributes,
-            'email': 'will.kable@axpo.com'
-        }
-        url = BASE_URL + '&'.join([f'{key}={val}' for key, val in dct.items()])
-        cont = requests.get(url).content
-        info = pandas.read_csv(io.BytesIO(cont), nrows=1)
+        print(self.LocationModel.Name, round(self.LocationModel.Index / 255 * 100, 2))
+
+        fetcher = RT.FetchResourceFiles(
+            'solar',
+            API_KEY_NREL,
+            'will.kable@axpo.com',
+            workers=512,
+            resource_dir='data\\Weather',
+            verbose=False,
+        )
+        fetcher = fetcher.fetch([(lon, lat)])
+        info = pandas.read_csv(fetcher.resource_file_paths[0], nrows=1)
         timezone, elevation = info['Local Time Zone'], info['Elevation']
         self.TimeZone = timezone[0]
         self.Elevation = elevation[0]
-        df = pandas.read_csv(io.BytesIO(cont), skiprows=2).assign(TimeZone=self.TimeZone, Elevation=self.Elevation)
-        df.to_csv(f'data/Weather/{lon}_{lat}_{year}.csv')
-        return df
+        df = pandas.read_csv(
+            fetcher.resource_file_paths[0],
+            skiprows=2,
+            usecols=lambda x: 'Unnamed' not in x
+        )
 
+        idx = pandas.to_datetime(df[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(f'Etc/GMT+{-self.TimeZone}').dt.tz_convert('US/Central')
+        df = self.PeriodModel.attributes(df.set_index(idx).shift(freq='1h')).sort_index()
+        return df
 
 class SolarModel(BaseModel):
     def __init__(self, models):
@@ -376,39 +372,39 @@ class SolarModel(BaseModel):
 
         ssc = pssc.PySSC()
         wfd = ssc.data_create()
-        # new = PVW.default('PVWattsMerchantPlant')
-        # PV_MODEL = PVW.new()
-        #
-        # PV_MODEL.assign(
-        #     {
-        #         'SolarResource': {
-        #             'solar_resource_data': {
-        #                 'dn': df['DNI'].tolist(),
-        #                 'df': df['DHI'].tolist(),
-        #                 'tdry': df['Temperature'].tolist(),
-        #                 'wspd': df['Wind Speed'].tolist(),
-        #                 'lat': self.LocationModel.Lat,
-        #                 'lon': self.LocationModel.Long,
-        #                 'elev': self.Elevation,
-        #                 'year': df.Year.to_list(),
-        #                 'month': df.Month.to_list(),
-        #                 'day': df.Day.to_list(),
-        #                 'hour': df.Hour.to_list(),
-        #                 'minute': (df.Hour * 0).tolist(),
-        #             }
-        #         },
-        #         'SystemDesign': {
-        #             'system_capacity': self.TechnologyModel.Capacity,
-        #             'dc_ac_ratio': self.TechnologyModel.DCRatio,
-        #             'tilt': 0, # self.TechnologyModel.Tilt,
-        #             'azimuth': self.TechnologyModel.Azimuth,
-        #             'inv_eff': self.TechnologyModel.InvEff,
-        #             'losses': self.TechnologyModel.Losses,
-        #             'array_type': ARRAY_MAP[self.TechnologyModel.ArrayType],
-        #             'gcr': self.TechnologyModel.GCR,
-        #         }
-        #     }
-        # )
+        new = PVW.default('PVWattsMerchantPlant')
+        PV_MODEL = PVW.new()
+
+        PV_MODEL.assign(
+            {
+                'SolarResource': {
+                    'solar_resource_data': {
+                        'dn': df['DNI'].tolist(),
+                        'df': df['DHI'].tolist(),
+                        'tdry': df['Temperature'].tolist(),
+                        'wspd': df['Wind Speed'].tolist(),
+                        'lat': self.LocationModel.Lat,
+                        'lon': self.LocationModel.Long,
+                        'elev': self.WeatherModel.Elevation,
+                        'year': df.Year.to_list(),
+                        'month': df.Month.to_list(),
+                        'day': df.Day.to_list(),
+                        'hour': df.Hour.to_list(),
+                        'minute': (df.Hour * 0).tolist(),
+                    }
+                },
+                'SystemDesign': {
+                    'system_capacity': self.TechnologyModel.Capacity,
+                    'dc_ac_ratio': self.TechnologyModel.DCRatio,
+                    'tilt': 0, # self.TechnologyModel.Tilt,
+                    'azimuth': self.TechnologyModel.Azimuth,
+                    'inv_eff': self.TechnologyModel.InvEff,
+                    'losses': self.TechnologyModel.Losses,
+                    'array_type': ARRAY_MAP[self.TechnologyModel.ArrayType],
+                    'gcr': self.TechnologyModel.GCR,
+                }
+            }
+        )
 
         # Initialize the Weather data
         ssc.data_set_number(wfd, b'lat', self.LocationModel.Lat)
@@ -873,17 +869,17 @@ class Model(BaseModel):
             self.TechnologyModel,
             self.FinanceModel
         ])
-        self.ValueModel = ValueModel([
-            self.LocationModel,
-            self.TechnologyModel,
-            self.SolarModel,
-            self.MarketModel,
-            self.PricingModel,
-            self.FinanceModel,
-            self.OperatingCostModel,
-            self.CapitalCostModel
-        ])
-        self.update_model([self.WeatherModel, self.SolarModel, self.MarketModel, self.ValueModel])
+        # self.ValueModel = ValueModel([
+        #     self.LocationModel,
+        #     self.TechnologyModel,
+        #     self.SolarModel,
+        #     self.MarketModel,
+        #     self.PricingModel,
+        #     self.FinanceModel,
+        #     self.OperatingCostModel,
+        #     self.CapitalCostModel
+        # ])
+        # self.update_model([self.WeatherModel, self.SolarModel, self.MarketModel, self.ValueModel])
 
 
 class Models(BaseModel):
@@ -930,10 +926,10 @@ class RunModel(BaseModel):
     def rebuild(self):
         self.PeriodModel = PeriodModel(self.FinanceModel.StartDate, self.FinanceModel.EndDate, 'US/Central')
         self.PricingModels = {i: PricingModel(i, [self.PeriodModel, self.DiscountModel, self.MarketModel]) for i in self.Zones}
-        with Pool() as pool:
-            self.Models = pool.map(self.build_mode, self.Locations)
-        # self.Models = [self.build_mode(i) for i in self.Locations]
-        self.DF = self.build_dataframe()
+        # with Pool() as pool:
+        #     self.Models = pool.map(self.build_mode, self.Locations)
+        self.Models = [self.build_mode(i) for i in self.Locations]
+        # self.DF = self.build_dataframe()
 
     def build_dataframe(self):
         cols = ['Name', 'FIPS', 'Lat', 'Long', 'Zone', 'LandPrice', 'FairValue', 'AverageDNI', 'AverageDHI', 'AverageMW']
@@ -1112,5 +1108,6 @@ def setup_app(model):
 
 if __name__ == "__main__":
     model = Models()
-    setup_app(model)
-
+#    setup_app(model)
+    model.RunModel.rebuild()
+    self = model.RunModel.Models[0].WeatherModel
