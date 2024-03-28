@@ -393,10 +393,10 @@ class SolarModel(BaseModel):
 
     def optimal_angle(self):
         lat, lon = self.LocationModel.Lat, self.LocationModel.Long
-        if os.path.exists(f'data/Angles/{lon}_{lat}.csv'):
-            return pandas.read_csv(f'data/Angles/{lon}_{lat}.csv', names=[0], skiprows=1).iloc[0, 0]
+        if os.path.exists(f'Config/Angles/{lon}_{lat}.csv'):
+            return pandas.read_csv(f'Config/Angles/{lon}_{lat}.csv', names=[0], skiprows=1).iloc[0, 0]
         angle = requests.get(f'https://api.globalsolaratlas.info/data/lta?loc={lat},{lon}').json()['annual']['data']['OPTA']
-        pandas.Series([angle]).to_csv(f'data/Angles/{lon}_{lat}.csv')
+        pandas.Series([angle]).to_csv(f'Config/Angles/{lon}_{lat}.csv')
         return angle
 
     def total_installed_cost(self):
@@ -411,9 +411,9 @@ class SolarModel(BaseModel):
         df = self.WeatherModel.Unfixed.copy()
 
         # Prices
-        energy_prices = self.PricingModel.Unfixed.loc[df.index]
-        cannib_prices = self.PricingModel.Unfixed.loc[df.index] * 0
-        ancila_prices = self.PricingModel.Unfixed.loc[df.index] * 0
+        energy_prices = self.EnergyModel.Unfixed.loc[df.index]
+        cannib_prices = self.EnergyModel.Unfixed.loc[df.index] * 0
+        ancila_prices = self.EnergyModel.Unfixed.loc[df.index] * 0
 
         ssc = pssc.PySSC()
         wfd = ssc.data_create()
@@ -513,7 +513,12 @@ class CannibalizationModel(BaseModel):
         self.update_model(models)
     def renewable_data(self):
         return pandas.read_csv('Assets/renewable_data.csv', index_col=0)
-class PricingModel(BaseModel):
+
+def RECModel(BaseModel):
+    def __init__(self, models):
+        self.Models = models
+
+class EnergyModel(BaseModel):
     def __init__(self, zone, models):
         self.Zone = zone
         self.update_model(models)
@@ -526,19 +531,17 @@ class PricingModel(BaseModel):
         return self.__class__.__name__ + ' ' + self.Zone
 
     def settles(self):
-        df = pandas.read_csv(f'data/Prices/Settled/{self.Zone}_settles.csv', index_col=0)
+        df = pandas.read_csv(f'data/Prices/Energy/Settled/{self.Zone}_settles.csv', index_col=0)
         return df.set_axis(pandas.to_datetime(df.index, utc=True)).tz_convert('US/Central')
 
     def forwards(self):
-        df = pandas.read_csv(f'data/Prices/Forward/{self.Zone}_forwards.csv', index_col=0)
+        df = pandas.read_csv(f'data/Prices/Energy/Forward/{self.Zone}_forwards.csv', index_col=0)
         df = df.set_axis(pandas.to_datetime(df.index))
         fill = pandas.concat([df] + [df[df.index.year == max(df.index.year)].rename(lambda x: x.replace(year=i)) for i in range(max(df.index.year) + 1, self.PeriodModel.EndDate.year + 1)])
         return fill.rename(lambda x: x.date()).loc[self.PeriodModel.StartDate.replace(day=1): self.PeriodModel.EndDate.replace(day=1)]
 
     def scalars(self):
-        return json.loads(open(f'data/Prices/Scalars/{self.Zone}_scalars.json').read())
-    def cannibalization(self):
-        return json.loads(open(f'data/Prices/Cannibalization/{self.Zone}_cannib.json').read())
+        return json.loads(open(f'data/Prices/Energy/Scalars/{self.Zone}_scalars.json').read())
     def datacurves(self):
         fwds = self.Forwards
         fwds_merge1 = fwds.reset_index().melt(id_vars='index').set_axis(['Date', 'TimeShape', 'Price'], axis=1).dropna()
@@ -572,7 +575,7 @@ class ValueModel(BaseModel):
     def __init__(self, models):
         self.Models = models
         self.update_model(self.Models, False)
-        self.Value = self.PricingModel.Unfixed * self.SolarModel.Unfixed.MW
+        self.Value = self.EnergyModel.Unfixed * self.SolarModel.Unfixed.MW
         self.IncomeDF = self.IncomeDF()
         self.FairValue = self.IncomeDF['Total Revenue ($)'].sum() / self.IncomeDF['MWh'].sum()
 
@@ -581,12 +584,12 @@ class ValueModel(BaseModel):
 
     def IncomeDF(self, grouping='YS'):
         mws = self.SolarModel.Unfixed.MW
-        pxs = self.PricingModel.Unfixed
+        pxs = self.EnergyModel.Unfixed
 
         def price_value(px):
             temp = mws * px
             temp = temp.groupby(temp.shift(freq='-1min').index.date).sum()
-            return temp * temp.index.map(self.PricingModel.DiscountModel.discount)
+            return temp * temp.index.map(self.EnergyModel.DiscountModel.discount)
 
         daily_mws = price_value(1)
         ene_value = price_value(pxs)
@@ -621,7 +624,7 @@ class Model(BaseModel):
             self.LocationModel,
             self.PeriodModel,
             self.MarketModel,
-            self.PricingModel,
+            self.EnergyModel,
             self.WeatherModel,
             self.TechnologyModel,
             self.FinanceModel,
@@ -633,7 +636,7 @@ class Model(BaseModel):
             self.TechnologyModel,
             self.SolarModel,
             self.MarketModel,
-            self.PricingModel,
+            self.EnergyModel,
             self.FinanceModel,
             self.OperatingCostModel,
             self.CapitalCostModel
@@ -671,7 +674,7 @@ class RunModel(BaseModel):
             [location,
              self.PeriodModel,
              self.MarketModel,
-             self.PricingModels[location.Zone],
+             self.EnergyModels[location.Zone],
              self.TechnologyModel,
              self.OperatingCostModel,
              self.CapitalCostModel,
@@ -684,7 +687,7 @@ class RunModel(BaseModel):
 
     def rebuild(self):
         self.PeriodModel = PeriodModel(self.FinanceModel.StartDate, self.FinanceModel.EndDate, 'US/Central')
-        self.PricingModels = {i: PricingModel(i, [self.PeriodModel, self.DiscountModel, self.MarketModel]) for i in self.Zones}
+        self.EnergyModels = {i: EnergyModel(i, [self.PeriodModel, self.DiscountModel, self.MarketModel]) for i in self.Zones}
         with Pool() as pool:
             self.Models = pool.map(self.build_mode, self.Locations)
         # self.Models = [self.build_mode(i) for i in self.Locations]

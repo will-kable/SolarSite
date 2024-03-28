@@ -3,15 +3,15 @@ from geopy.geocoders import Nominatim
 import json
 from timezonefinder import TimezoneFinder
 
-COUNTIES = pandas.read_csv("Assets/Texas_Counties_Centroid_Map.csv")
+COUNTIES = pandas.read_csv("Config/Texas_Counties_Centroid_Map.csv")
 
-LAND_PRICES = json.load(open('Assets/land_prices.json'))
+LAND_PRICES = json.load(open('Config/land_prices.json'))
 
 FINDER = TimezoneFinder()
 
-GEO_JSON = json.load(open('Assets/geo_json.json'))
+GEO_JSON = json.load(open('Config/geo_json.json'))
 
-PROP_TAXES = json.load(open('Assets/property_tax.json'))
+PROP_TAXES = json.load(open('Config/property_tax.json'))
 
 API_KEY_NREL = 'me1DbZYqNf6JyoeT9XlnhQhHuzdjVsY4xbXzXzg0'
 
