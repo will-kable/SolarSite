@@ -11,6 +11,8 @@ FINDER = TimezoneFinder()
 
 GEO_JSON = json.load(open('Assets/geo_json.json'))
 
+PROP_TAXES = json.load(open('Assets/property_tax.json'))
+
 API_KEY_NREL = 'me1DbZYqNf6JyoeT9XlnhQhHuzdjVsY4xbXzXzg0'
 
 ARRAY_MAP = {
@@ -19,6 +21,18 @@ ARRAY_MAP = {
     '1 Axis Tracker': 2,
     '1 Axis Backtracked': 3,
     '2 Axis Tracker': 4,
+}
+
+MODULE_MAP = {
+    'Standard': 0,
+    'Premium': 1,
+    'Thin Film': 2
+}
+
+MODULE_EFF = {
+    'Standard': 0.19,
+    'Premium': 0.21,
+    'Thin Film': 0.18
 }
 
 ZONAL_MAP = {

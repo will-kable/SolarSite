@@ -19,7 +19,7 @@ import plotly.express as px
 from dash import Dash, dcc, html, callback, ALL, MATCH, Input, State, Output, Patch, no_update
 import dash_bootstrap_components as dbc
 from common import closest_key, timeshape
-from config import COUNTIES, API_KEY_NREL, FINDER, ZONAL_MAP, GEO_JSON, LAND_PRICES, ARRAY_MAP
+from config import COUNTIES, API_KEY_NREL, FINDER, ZONAL_MAP, GEO_JSON, LAND_PRICES, ARRAY_MAP, MODULE_MAP, MODULE_EFF, PROP_TAXES
 import dash_daq as daq
 from dateutil import relativedelta
 from flask_caching import Cache
@@ -55,6 +55,7 @@ class LocationModel(BaseModel):
         self.TimeZone = FINDER.timezone_at(lng=self.Long, lat=self.Lat)
         self.Zone = closest_key(ZONAL_MAP, (lat, long))
         self.LandPrice = LAND_PRICES[self.Name]['Data']['2023']
+        self.PropertyTax = PROP_TAXES[self.Name]/100
         self.LandRegion = LAND_PRICES[self.Name]['Region']
 
     def __repr__(self):
@@ -68,6 +69,7 @@ class PeriodModel(BaseModel):
         self.TimeZone = timezone
         self.Forward = pandas.date_range(sd, ed + datetime.timedelta(days=1), freq='h', tz=self.TimeZone)[1:]
         self.ForwardMerge = self.attributes(self.Forward)
+        self.Years = list(range(self.StartDate.year, self.EndDate.year + 1))
     def __repr__(self):
         return f'{self.__class__.__name__} {self.StartDate} {self.EndDate} {self.TimeZone}'
 
@@ -104,10 +106,17 @@ class TechnologyModel(BaseModel):
         self.ArrayType = 'Fixed'
         self.GCR = 0.4
         self.DegradationRate = 0.5
+        self.ModuleType = 'Standard'
 
     def __repr__(self):
         return self.__class__.__name__
 
+    @property
+    def ModuleEfficiency(self):
+        return MODULE_EFF[self.ModuleType]
+    @property
+    def LandArea(self):
+        return self.Capacity * 1000 / self.ModuleEfficiency * 0.000247105 / self.GCR
     def render(self):
         return html.Div(
             [
@@ -131,6 +140,11 @@ class TechnologyModel(BaseModel):
                 dcc.Dropdown(id={'type': 'param', 'name': 'ArrayType'},
                              options=['Fixed', 'Fixed Roof', '1 Axis Tracker', '1 Axis Backtracked', '2 Axis Tracker'],
                              placeholder=self.ArrayType),
+                html.P('Module Type'),
+                html.Br(),
+                dcc.Dropdown(id={'type': 'param', 'name': 'ModuleType'},
+                             options=['Standard', 'Premium', 'Thin Film'],
+                             placeholder=self.ModuleType),
                 html.P('GCR'),
                 html.Br(),
                 dcc.Input(id={'type': 'param', 'name': 'GCR'}, type='number', placeholder=self.GCR),
@@ -185,6 +199,12 @@ class CapitalCostModel(BaseModel):
         self.PermittingCost = 0
         self.GridConnectionCost = 0.02
         self.EngineeringCost = 0.02
+
+    def total_cost(self, capacity):
+        direct = (self.ModuleCost + self.InverterCost + self.EquipmentCost + self.LaborCost + self.OverheadCost)
+        direct += (direct * self.ContingencyCost)
+
+        indirect = (self.PermittingCost + self.GridConnectionCost + self.EngineeringCost)
 
     def render(self):
         return html.Div(
@@ -241,26 +261,32 @@ class OperatingCostModel(BaseModel):
 class FinanceModel(BaseModel):
     def __init__(self):
         self.Term = 10
-        self.Date = (datetime.date.today() + relativedelta.relativedelta(months=1)).replace(day=1)
+        self.StartYear = datetime.date.today().year + 1
         self.InflationRate = 2.5
         self.FederalTaxRate = 21
         self.StateTaxRate = 7
-        self.PropertyTaxRate = 0
+        self.PropertyTaxRate = 1.5
+        self.SalesTaxRate = 6.25
 
     @property
     def StartDate(self):
-        return pandas.to_datetime(self.Date).date()
+        return datetime.date(self.StartYear, 1, 1)
 
     @property
-    def EndDate(self) -> datetime:
+    def EndDate(self):
         return self.StartDate + relativedelta.relativedelta(years=self.Term, days=-1)
+
+    @property
+    def Years(self):
+        return list(range(self.StartYear, self.EndDate.year + 1))
 
     def render(self):
         return html.Div(
             [
-                html.P('Start Date'),
+                html.P('Start Yera'),
                 html.Br(),
-                dcc.DatePickerSingle(id={'type': 'dates', 'name': 'Date'}, date=self.Date),
+                dcc.Input(id={'type': 'param', 'name': 'StartYear'}, type='number', placeholder=self.StartYear),
+                # dcc.DatePickerSingle(id={'type': 'dates', 'name': 'Date'}, date=self.Date),
                 html.P('Analysis Period (years)'),
                 html.Br(),
                 dcc.Input(id={'type': 'param', 'name': 'Term'}, type='number', placeholder=self.Term),
@@ -273,12 +299,12 @@ class FinanceModel(BaseModel):
                 html.P('State Tax Rate (%)'),
                 html.Br(),
                 dcc.Input(id={'type': 'param', 'name': 'StateTaxRate'}, type='number', placeholder=self.StateTaxRate),
-
                 html.P('Property Tax Rate (%)'),
                 html.Br(),
                 dcc.Input(id={'type': 'param', 'name': 'PropertyTaxRate'}, type='number', placeholder=self.PropertyTaxRate),
-
-
+                html.P('Sales Tax Rate (%)'),
+                html.Br(),
+                dcc.Input(id={'type': 'param', 'name': 'SalesTaxRate'}, type='number',placeholder=self.SalesTaxRate),
 
             ]
         )
@@ -310,10 +336,10 @@ class WeatherModel(BaseModel):
 
     def projected(self):
         df = self.Fixed
-        cols = ['GHI', 'DHI', 'DNI', 'Wind Speed', 'Temperature', 'Surface Albedo']
-        grp = df.groupby(['Month', 'HourEnding'])[cols].mean().reset_index()
-        fwd = self.PeriodModel.ForwardMerge.merge(grp)
-        return fwd.set_index('index').sort_index()
+        df = pandas.concat([df.assign(Year=year) for year in self.PeriodModel.Years])
+        idx = pandas.to_datetime(df[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(f'Etc/GMT+{-self.TimeZone}').dt.tz_convert('US/Central')
+        df = df.assign(HourEnding=idx.dt.hour+1).set_index(idx).sort_index().shift(freq='1h')
+        return df
 
     def pull_historical(self):
         lon, lat = self.LocationModel.Long, self.LocationModel.Lat
@@ -336,10 +362,6 @@ class WeatherModel(BaseModel):
             skiprows=2,
             usecols=lambda x: 'Unnamed' not in x
         )
-
-        idx = pandas.to_datetime(df[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(f'Etc/GMT+{-self.TimeZone}').dt.tz_convert('US/Central')
-        df = df.set_index(idx).sort_index().shift(freq='1h')
-        df = self.PeriodModel.attributes(df).sort_index()
         return df
 
 
@@ -367,21 +389,28 @@ class SolarModel(BaseModel):
         print('Simulating: ', self.LocationModel.Name, self.LocationModel.Index)
         df = self.WeatherModel.Unfixed.copy()
 
+        # Prices
+        energy_prices = self.PricingModel.Unfixed.loc[df.index]
+        cannib_prices = self.PricingModel.Unfixed.loc[df.index] * 0
+        ancila_prices = self.PricingModel.Unfixed.loc[df.index] * 0
+
         ssc = pssc.PySSC()
         wfd = ssc.data_create()
-        new = PVW.default('PVWattsMerchantPlant')
-        PV_MODEL = PVW.new()
+        new = MERC.default('PVWattsMerchantPlant')
+        PV_MODEL = PVW.default('PVWattsMerchantPlant')
+        MERC_MODEL = MERC.default('PVWattsMerchantPlant')
 
         PV_MODEL.assign(
             {
                 'SystemDesign': {
-                    'system_capacity': self.TechnologyModel.Capacity,
+                    'system_capacity': self.TechnologyModel.Capacity*1000,
                     'dc_ac_ratio': self.TechnologyModel.DCRatio,
                     'tilt': self.Tilt,
                     'azimuth': self.TechnologyModel.Azimuth,
                     'inv_eff': self.TechnologyModel.InvEff,
                     'losses': self.TechnologyModel.Losses,
                     'array_type': ARRAY_MAP[self.TechnologyModel.ArrayType],
+                    'module_type': MODULE_MAP[self.TechnologyModel.ModuleType],
                     'gcr': self.TechnologyModel.GCR,
                 },
                 'SolarResource': {
@@ -406,11 +435,41 @@ class SolarModel(BaseModel):
                 },
             }
         )
+
         PV_MODEL.execute()
-        out = PV_MODEL.Outputs.export()
-        mws = numpy.array(out['gen'])
+        out_solar = PV_MODEL.Outputs.export()
+
+        MERC_MODEL.assign(
+            {
+                'SystemOutput': {
+                    'gen': out_solar['gen']
+                },
+                'FinancialParameters': {
+                    'analysis_period': len(self.PeriodModel.Years),
+                    'property_tax_rate': self.LocationModel.PropertyTax,
+                    'inflation_rate': self.FinanceModel.InflationRate,
+                    'state_tax_rate': [self.FinanceModel.StateTaxRate],
+                    'federal_tax_rate': [self.FinanceModel.FederalTaxRate],
+                    'system_capacity': self.TechnologyModel.Capacity * 1000,
+                },
+                'Revenue': {
+                    'flip_target_percent': 15,
+                    'flip_target_year': 25,
+                    'mp_energy_market_revenue_single': energy_prices.to_frame().to_records(index=False).tolist()
+                },
+                'SystemCosts': {
+                    'om_capacity': [self.OperatingCostModel.AnnualCost],
+                }
+
+            }
+        )
+
+        MERC_MODEL.execute()
+        out_merc = MERC_MODEL.Outputs.export()
+
+        mws = numpy.array(out_solar['gen'])
         df = df.assign(MW=mws)
-        return
+        return df
 
     def projected(self):
         grp = self.Fixed.groupby(['Month', 'HourEnding'])['MW'].mean().reset_index()
@@ -532,7 +591,9 @@ class Model(BaseModel):
             self.PricingModel,
             self.WeatherModel,
             self.TechnologyModel,
-            self.FinanceModel
+            self.FinanceModel,
+            self.OperatingCostModel,
+            self.CapitalCostModel,
         ])
         # self.ValueModel = ValueModel([
         #     self.LocationModel,
@@ -591,9 +652,9 @@ class RunModel(BaseModel):
     def rebuild(self):
         self.PeriodModel = PeriodModel(self.FinanceModel.StartDate, self.FinanceModel.EndDate, 'US/Central')
         self.PricingModels = {i: PricingModel(i, [self.PeriodModel, self.DiscountModel, self.MarketModel]) for i in self.Zones}
-        with Pool() as pool:
-            self.Models = pool.map(self.build_mode, self.Locations)
-        # self.Models = [self.build_mode(i) for i in self.Locations]
+        # with Pool() as pool:
+        #     self.Models = pool.map(self.build_mode, self.Locations)
+        self.Models = [self.build_mode(i) for i in self.Locations]
         # self.DF = self.build_dataframe()
 
     def build_dataframe(self):
