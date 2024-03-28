@@ -61,6 +61,12 @@ class LocationModel(BaseModel):
     def __repr__(self):
         return self.Name
 
+    def LandCost(self, area):
+        return self.LandPrice * area
+
+    def LandTax(self, area):
+        return self.LandCost(area) * self.PropertyTax/100
+
 
 class PeriodModel(BaseModel):
     def __init__(self, sd, ed, timezone):
@@ -68,7 +74,10 @@ class PeriodModel(BaseModel):
         self.EndDate = ed
         self.TimeZone = timezone
         self.Forward = pandas.date_range(sd, ed + datetime.timedelta(days=1), freq='h', tz=self.TimeZone)[1:]
+        self.ForwardExtra = pandas.date_range(sd - datetime.timedelta(days=1), ed + datetime.timedelta(days=2), freq='h', tz=self.TimeZone)[1:]
         self.ForwardMerge = self.attributes(self.Forward)
+        self.ForwardMergeExtra = self.attributes(self.ForwardExtra)
+
         self.Years = list(range(self.StartDate.year, self.EndDate.year + 1))
     def __repr__(self):
         return f'{self.__class__.__name__} {self.StartDate} {self.EndDate} {self.TimeZone}'
@@ -200,12 +209,14 @@ class CapitalCostModel(BaseModel):
         self.GridConnectionCost = 0.02
         self.EngineeringCost = 0.02
 
-    def total_cost(self, capacity):
+    def direct_cost(self, capacity):
         direct = (self.ModuleCost + self.InverterCost + self.EquipmentCost + self.LaborCost + self.OverheadCost)
         direct += (direct * self.ContingencyCost)
+        return direct * 1e6 * capacity
 
+    def indirect_cost(self, capacity):
         indirect = (self.PermittingCost + self.GridConnectionCost + self.EngineeringCost)
-
+        return indirect * 1e6 * capacity
     def render(self):
         return html.Div(
             [
@@ -369,10 +380,13 @@ class SolarModel(BaseModel):
     def __init__(self, models):
         self.update_model(models, False)
         self.Tilt = self.optimal_angle()
+        self.LCOEReal = 0
+        self.LCOENom = 0
         self.Unfixed = self.simulate()
         self.CapacityFactor = self.Unfixed.MW.sum() / self.Unfixed.MW.count() / self.TechnologyModel.Capacity
         self.HourlyProfile = self.Unfixed.groupby(['Month', 'HourEnding'])['MW'].sum().unstack()
         self.AverageMW = self.Unfixed.MW.mean()
+
 
     def __repr__(self):
         return self.__class__.__name__ + ' ' + self.LocationModel.Name
@@ -384,6 +398,13 @@ class SolarModel(BaseModel):
         angle = requests.get(f'https://api.globalsolaratlas.info/data/lta?loc={lat},{lon}').json()['annual']['data']['OPTA']
         pandas.Series([angle]).to_csv(f'data/Angles/{lon}_{lat}.csv')
         return angle
+
+    def total_installed_cost(self):
+        direct = self.CapitalCostModel.direct_cost(self.TechnologyModel.Capacity)
+        indirect = self.CapitalCostModel.indirect_cost(self.TechnologyModel.Capacity)
+        land = self.LocationModel.LandCost(self.TechnologyModel.LandArea)
+        sales = self.FinanceModel.SalesTaxRate * (direct)
+        return direct + indirect + land + sales
 
     def simulate(self):
         print('Simulating: ', self.LocationModel.Name, self.LocationModel.Index)
@@ -446,7 +467,7 @@ class SolarModel(BaseModel):
                 },
                 'FinancialParameters': {
                     'analysis_period': len(self.PeriodModel.Years),
-                    'property_tax_rate': self.LocationModel.PropertyTax,
+                    'property_tax_rate': self.LocationModel.PropertyTax * 100,
                     'inflation_rate': self.FinanceModel.InflationRate,
                     'state_tax_rate': [self.FinanceModel.StateTaxRate],
                     'federal_tax_rate': [self.FinanceModel.FederalTaxRate],
@@ -457,8 +478,12 @@ class SolarModel(BaseModel):
                     'flip_target_year': 25,
                     'mp_energy_market_revenue_single': energy_prices.to_frame().to_records(index=False).tolist()
                 },
+
+
+
                 'SystemCosts': {
                     'om_capacity': [self.OperatingCostModel.AnnualCost],
+                    'total_installed_cost': self.total_installed_cost(),
                 }
 
             }
@@ -467,7 +492,9 @@ class SolarModel(BaseModel):
         MERC_MODEL.execute()
         out_merc = MERC_MODEL.Outputs.export()
 
-        mws = numpy.array(out_solar['gen'])
+        self.LCOEReal = out_merc['lcoe_real']
+        self.LCOENom = out_merc['lcoe_nom']
+        mws = numpy.array(out_solar['gen'])/1000
         df = df.assign(MW=mws)
         return df
 
@@ -510,7 +537,7 @@ class PricingModel(BaseModel):
         fwds = self.Forwards
         fwds_merge1 = fwds.reset_index().melt(id_vars='index').set_axis(['Date', 'TimeShape', 'Price'], axis=1).dropna()
         fwds_merge2 = fwds.reset_index().melt(id_vars='index').set_axis(['DateMonth', 'TimeShape', 'Price'], axis=1).dropna()
-        mrg = self.PeriodModel.ForwardMerge
+        mrg = self.PeriodModel.ForwardMergeExtra
         mrg = mrg.assign(Price=mrg.merge(fwds_merge1, how='left')['Price'].fillna(mrg.merge(fwds_merge2, how='left')['Price']).values)
         scalars = self.Scalars
         last_year = max([int(i.split('-')[-1]) for i in scalars])
@@ -595,17 +622,17 @@ class Model(BaseModel):
             self.OperatingCostModel,
             self.CapitalCostModel,
         ])
-        # self.ValueModel = ValueModel([
-        #     self.LocationModel,
-        #     self.TechnologyModel,
-        #     self.SolarModel,
-        #     self.MarketModel,
-        #     self.PricingModel,
-        #     self.FinanceModel,
-        #     self.OperatingCostModel,
-        #     self.CapitalCostModel
-        # ])
-        # self.update_model([self.WeatherModel, self.SolarModel, self.MarketModel, self.ValueModel])
+        self.ValueModel = ValueModel([
+            self.LocationModel,
+            self.TechnologyModel,
+            self.SolarModel,
+            self.MarketModel,
+            self.PricingModel,
+            self.FinanceModel,
+            self.OperatingCostModel,
+            self.CapitalCostModel
+        ])
+        self.update_model([self.WeatherModel, self.SolarModel, self.MarketModel, self.ValueModel])
 
 
 class Models(BaseModel):
@@ -615,7 +642,7 @@ class Models(BaseModel):
         self.End = datetime.date.today() + datetime.timedelta(days=365)
         self.Lats = COUNTIES['X (Lat)'].tolist()
         self.Longs = COUNTIES['Y (Long)'].tolist()
-        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:5]
+        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)]
         self.Zones = set([i.Zone for i in self.Locations])
         self.TimeZones = set([i.TimeZone for i in self.Locations])
         self.TechnologyModel = TechnologyModel()
@@ -652,13 +679,13 @@ class RunModel(BaseModel):
     def rebuild(self):
         self.PeriodModel = PeriodModel(self.FinanceModel.StartDate, self.FinanceModel.EndDate, 'US/Central')
         self.PricingModels = {i: PricingModel(i, [self.PeriodModel, self.DiscountModel, self.MarketModel]) for i in self.Zones}
-        # with Pool() as pool:
-        #     self.Models = pool.map(self.build_mode, self.Locations)
-        self.Models = [self.build_mode(i) for i in self.Locations]
-        # self.DF = self.build_dataframe()
+        with Pool() as pool:
+            self.Models = pool.map(self.build_mode, self.Locations)
+        # self.Models = [self.build_mode(i) for i in self.Locations]
+        self.DF = self.build_dataframe()
 
     def build_dataframe(self):
-        cols = ['Name', 'FIPS', 'Lat', 'Long', 'Zone', 'LandPrice', 'FairValue', 'AverageDNI', 'AverageDHI', 'AverageMW']
+        cols = ['Name', 'FIPS', 'Lat', 'Long', 'Zone', 'LandPrice', 'PropertyTax', 'FairValue', 'AverageDNI', 'AverageDHI', 'AverageMW', 'LCOEReal', 'LCOENom']
         return pandas.DataFrame({col: [getattr(i, col) for i in self.Models] for col in cols})
 
     def render(self):
@@ -834,6 +861,6 @@ def setup_app(model):
 
 if __name__ == "__main__":
     model = Models()
-    # setup_app(model)
-    model.RunModel.rebuild()
-    self = model.RunModel.Models[0].SolarModel
+    setup_app(model)
+    # model.RunModel.rebuild()
+    # self = model.RunModel.Models[0].SolarModel
