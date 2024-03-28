@@ -507,7 +507,12 @@ class SolarModel(BaseModel):
         deg = fwd.shift(freq='-1h').index.map(lambda x: (1-deg_rate)**(x.year - min_year))
         return fwd * deg
 
-
+class CannibalizationModel(BaseModel):
+    def __init__(self, models):
+        self.Models = models
+        self.update_model(models)
+    def renewable_data(self):
+        return pandas.read_csv('Assets/renewable_data.csv', index_col=0)
 class PricingModel(BaseModel):
     def __init__(self, zone, models):
         self.Zone = zone
@@ -532,7 +537,8 @@ class PricingModel(BaseModel):
 
     def scalars(self):
         return json.loads(open(f'data/Prices/Scalars/{self.Zone}_scalars.json').read())
-
+    def cannibalization(self):
+        return json.loads(open(f'data/Prices/Cannibalization/{self.Zone}_cannib.json').read())
     def datacurves(self):
         fwds = self.Forwards
         fwds_merge1 = fwds.reset_index().melt(id_vars='index').set_axis(['Date', 'TimeShape', 'Price'], axis=1).dropna()
@@ -642,7 +648,7 @@ class Models(BaseModel):
         self.End = datetime.date.today() + datetime.timedelta(days=365)
         self.Lats = COUNTIES['X (Lat)'].tolist()
         self.Longs = COUNTIES['Y (Long)'].tolist()
-        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)]
+        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:1]
         self.Zones = set([i.Zone for i in self.Locations])
         self.TimeZones = set([i.TimeZone for i in self.Locations])
         self.TechnologyModel = TechnologyModel()
@@ -861,6 +867,6 @@ def setup_app(model):
 
 if __name__ == "__main__":
     model = Models()
-    setup_app(model)
-    # model.RunModel.rebuild()
-    # self = model.RunModel.Models[0].SolarModel
+    # setup_app(model)
+    model.RunModel.rebuild()
+    self = model.RunModel.Models[0].SolarModel
