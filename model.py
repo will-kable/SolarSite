@@ -167,10 +167,9 @@ class TechnologyModel(BaseModel):
 
 class MarketModel(BaseModel):
     def __init__(self):
-        self.IncludeCannib = True
-        self.IncludeCurtailment = True
-        self.IncludeRECs = True
-        self.IncludeAncillary = True
+        self.IncludeCannib = False
+        self.IncludeCurtailment = False
+        self.IncludeRECs = False
         self.FederalPTC = 0.275
         self.StatePTC = 0
 
@@ -184,16 +183,12 @@ class MarketModel(BaseModel):
                 daq.ToggleSwitch(label='Include Curtailment Adjustment', id={'type': 'param', 'name': 'IncludeCurtailment'}),
                 html.Br(),
                 daq.ToggleSwitch(label='Include REC Value', id={'type': 'param', 'name': 'IncludeRECs'}),
-                html.Br(),
-                daq.ToggleSwitch(label='Include Include Ancillary Value',
-                                 id={'type': 'param', 'name': 'IncludeAncillary'}),
                 html.P('Federal PTC ($/MWh)'),
                 html.Br(),
                 dcc.Input(id={'type': 'param', 'name': 'FederalPTC'}, type='number', placeholder=self.FederalPTC),
                 html.P('State PTC ($/MWh)'),
                 html.Br(),
                 dcc.Input(id={'type': 'param', 'name': 'StatePTC'}, type='number', placeholder=self.StatePTC),
-
             ]
         )
 
@@ -463,6 +458,7 @@ class SolarModel(BaseModel):
                     'degradation': [self.TechnologyModel.DegradationRate],
                     'system_capacity': self.TechnologyModel.Capacity*1000,
                 },
+
                 'FinancialParameters': {
                     'analysis_period': len(self.PeriodModel.Years),
                     'property_tax_rate': self.LocationModel.PropertyTax * 100,
@@ -472,12 +468,13 @@ class SolarModel(BaseModel):
                     'system_capacity': self.TechnologyModel.Capacity * 1000,
                     'debt_option': 0,
                     'term_tenor': 5,
-
                 },
+
                 'Revenue': {
                     'mp_energy_market_revenue_single': final_prices.to_frame().to_records(index=False).tolist(),
                     'mp_market_percent_gen': 100,
                 },
+
                 'Lifetime': {
                     'system_use_lifetime_output': 1
                 },
@@ -486,7 +483,6 @@ class SolarModel(BaseModel):
                     'om_capacity': [self.OperatingCostModel.AnnualCost * 1000],
                     'total_installed_cost': self.total_installed_cost(),
                 }
-
             }
         )
 
@@ -534,6 +530,7 @@ class SolarModel(BaseModel):
 class CannibalizationModel(BaseModel):
     def __init__(self, zone, models):
         self.Models = models
+        self.Zone = zone
         self.update_model(models)
         self.Data = self.data()
         self.CapacityData = self.capacity_data()
@@ -569,27 +566,31 @@ class CannibalizationModel(BaseModel):
         return vgr
 
     def fwd_vgr(self):
-        df = self.Data
-        hist_vgr = self.Fixed
-        forw_cap = self.CapacityData['Forecast'].dropna()
-        hist_cap = df['Solar Cap'].shift(freq='-1min').groupby(lambda x: x.date().replace(day=1)).max()
-        mont_vgr = hist_vgr.groupby(lambda x: x.month).mean()
-        out = []
-        for month in range(1,13):
-            temp_month_cap = hist_cap[hist_cap.index.map(lambda x: x.month==month)]
-            temp_month_vgr = hist_vgr[hist_vgr.index.map(lambda x: x.month==month)]
-            temp_month_fwd = forw_cap[forw_cap.index.map(lambda x: x.month==month)]
-            temp = []
-            for timeshape in ['5x16', '2x16', '7x8']:
-                model = LinearRegression()
-                model.fit(temp_month_cap.to_frame(), temp_month_vgr[timeshape])
-                predi = model.predict(temp_month_fwd.to_frame('Solar Cap'))
-                temp.append(pandas.Series(predi, index=temp_month_fwd.index).to_frame(timeshape))
-            out.append(pandas.concat(temp, axis=1))
-        out = pandas.concat(out).sort_index()
-        out = out.reset_index().melt(id_vars='index').set_axis(['DateMonth', 'TimeShape', 'Scalar'], axis=1)
-        out = self.PeriodModel.ForwardMerge.merge(out).set_index('index')['Scalar'] - 1
+        df = pandas.read_csv(f'data/Prices/Cannib/{self.Zone}_vgr.csv', index_col=0).rename(pandas.to_datetime).rename(lambda x: x.date())
+        vgr = df.reset_index().melt(id_vars='index').set_axis(['DateMonth', 'TimeShape', 'Scalar'], axis=1)
+        out = self.PeriodModel.ForwardMerge.merge(vgr).set_index('index')['Scalar'] - 1
         return out * self.EnergyModel.Unfixed.loc[out.index]
+        # df = self.Data
+        # hist_vgr = self.Fixed
+        # forw_cap = self.CapacityData['Forecast'].dropna()
+        # hist_cap = df['Solar Cap'].shift(freq='-1min').groupby(lambda x: x.date().replace(day=1)).max()
+        # mont_vgr = hist_vgr.groupby(lambda x: x.month).mean()
+        # out = []
+        # for month in range(1,13):
+        #     temp_month_cap = hist_cap[hist_cap.index.map(lambda x: x.month==month)]
+        #     temp_month_vgr = hist_vgr[hist_vgr.index.map(lambda x: x.month==month)]
+        #     temp_month_fwd = forw_cap[forw_cap.index.map(lambda x: x.month==month)]
+        #     temp = []
+        #     for timeshape in ['5x16', '2x16', '7x8']:
+        #         model = LinearRegression()
+        #         model.fit(temp_month_cap.to_frame(), temp_month_vgr[timeshape])
+        #         predi = model.predict(temp_month_fwd.to_frame('Solar Cap'))
+        #         temp.append(pandas.Series(predi, index=temp_month_fwd.index).to_frame(timeshape))
+        #     out.append(pandas.concat(temp, axis=1))
+        # out = pandas.concat(out).sort_index()
+        # out = out.reset_index().melt(id_vars='index').set_axis(['DateMonth', 'TimeShape', 'Scalar'], axis=1)
+        # out = self.PeriodModel.ForwardMerge.merge(out).set_index('index')['Scalar'] - 1
+        # return out * self.EnergyModel.Unfixed.loc[out.index]
 
 class RECModel(BaseModel):
     def __init__(self, models):
@@ -696,7 +697,7 @@ class Models(BaseModel):
         self.End = datetime.date.today() + datetime.timedelta(days=365)
         self.Lats = COUNTIES['X (Lat)'].tolist()
         self.Longs = COUNTIES['Y (Long)'].tolist()
-        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)]
+        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:5]
         self.Zones = set([i.Zone for i in self.Locations])
         self.TimeZones = set([i.TimeZone for i in self.Locations])
         self.TechnologyModel = TechnologyModel()
@@ -923,6 +924,6 @@ def setup_app(model):
 if __name__ == "__main__":
     app = Dash(__name__)
     model = Models()
-    setup_app(model)
-    # model.RunModel.rebuild()
-    # self = model.RunModel.Models[0].SolarModel
+#     setup_app(model)
+    model.RunModel.rebuild()
+    self = model.RunModel.Models[0].SolarModel
