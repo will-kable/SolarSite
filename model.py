@@ -488,9 +488,7 @@ class SolarModel(BaseModel):
 
         MERC_MODEL.execute()
         out_merc = MERC_MODEL.Outputs.export()
-        # test = pandas.concat([pandas.Series(val).to_frame(key) for key, val in out_merc.items() if
-        #                     isinstance(val, tuple) and len(val) == 11], axis=1)
-        # test.T.to_csv('test.csv')
+
         self.FairValue = sum(out_merc['cf_energy_market_revenue']) / (sum(out_merc['cf_energy_net']) / 1000)
         self.LCOEReal = out_merc['lcoe_real']
         self.LCOENom = out_merc['lcoe_nom']
