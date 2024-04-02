@@ -32,6 +32,13 @@ timeout = 60
 plt.interactive(True)
 
 class BaseModel:
+    def __init__(self):
+        self.S1 = datetime.datetime.now()
+
+    @property
+    def ExecutionTime(self):
+        return (self.S2 - self.S1).total_seconds()
+
     @property
     def get_dict(self):
         return dict(vars(self))
@@ -41,11 +48,13 @@ class BaseModel:
             setattr(self, model.__class__.__name__, model)
             if update_sub_parmas:
                 for key, value in model.__dict__.items():
-                    setattr(self, key, value)
+                    if key not in ['S1', 'S2']:
+                        setattr(self, key, value)
 
 
 class LocationModel(BaseModel):
     def __init__(self, lat, long):
+        super().__init__()
         self.Lat = lat
         self.Long = long
         self.Index = ((COUNTIES['X (Lat)'] - lat).abs() + (COUNTIES['Y (Long)'] - long).abs()).idxmin()
@@ -57,6 +66,7 @@ class LocationModel(BaseModel):
         self.LandPrice = LAND_PRICES[self.Name]['Data']['2023']
         self.PropertyTax = PROP_TAXES[self.Name]/100
         self.LandRegion = LAND_PRICES[self.Name]['Region']
+        self.S2 = datetime.datetime.now()
 
     def __repr__(self):
         return self.Name
@@ -70,16 +80,15 @@ class LocationModel(BaseModel):
 
 class PeriodModel(BaseModel):
     def __init__(self, sd, ed, timezone):
+        super().__init__()
         self.StartDate = sd
         self.EndDate = ed
         self.TimeZone = timezone
         self.Forward = pandas.date_range(sd, ed + datetime.timedelta(days=1), freq='h', tz=self.TimeZone)[1:]
         self.ForwardMerge = self.attributes(self.Forward)
-        # self.ForwardExtra = pandas.date_range(sd - datetime.timedelta(days=1), ed + datetime.timedelta(days=2), freq='h', tz=self.TimeZone)[1:]
-
-        # self.ForwardMergeExtra = self.attributes(self.ForwardExtra)
         self.Years = list(range(self.StartDate.year, self.EndDate.year + 1))
         self.CashFlowYears = list(range(self.StartDate.year-1, self.EndDate.year + 1))
+        self.S2 = datetime.datetime.now()
 
     def __repr__(self):
         return f'{self.__class__.__name__} {self.StartDate} {self.EndDate} {self.TimeZone}'
@@ -108,6 +117,7 @@ class PeriodModel(BaseModel):
 
 class TechnologyModel(BaseModel):
     def __init__(self):
+        super().__init__()
         self.Capacity = 100
         self.DCRatio = 1.1
         self.Azimuth = 180
@@ -117,6 +127,7 @@ class TechnologyModel(BaseModel):
         self.GCR = 0.4
         self.DegradationRate = 0.5
         self.ModuleType = 'Standard'
+        self.S2 = datetime.datetime.now()
 
     def __repr__(self):
         return self.__class__.__name__
@@ -124,9 +135,11 @@ class TechnologyModel(BaseModel):
     @property
     def ModuleEfficiency(self):
         return MODULE_EFF[self.ModuleType]
+
     @property
     def LandArea(self):
         return self.Capacity * 1000 / self.ModuleEfficiency * 0.000247105 / self.GCR
+
     def render(self):
         return html.Div(
             [
@@ -167,12 +180,13 @@ class TechnologyModel(BaseModel):
 
 class MarketModel(BaseModel):
     def __init__(self):
+        super().__init__()
         self.IncludeCannib = False
         self.IncludeCurtailment = False
         self.IncludeRECs = False
         self.FederalPTC = 0.275
         self.StatePTC = 0
-
+        self.S2 = datetime.datetime.now()
 
     def render(self):
         return html.Div(
@@ -195,6 +209,7 @@ class MarketModel(BaseModel):
 
 class CapitalCostModel(BaseModel):
     def __init__(self):
+        super().__init__()
         self.ModuleCost = 0.39
         self.InverterCost = 0.05
         self.EquipmentCost = 0.29
@@ -204,6 +219,7 @@ class CapitalCostModel(BaseModel):
         self.PermittingCost = 0
         self.GridConnectionCost = 0.02
         self.EngineeringCost = 0.02
+        self.S2 = datetime.datetime.now()
 
     def direct_cost(self, capacity):
         direct = (self.ModuleCost + self.InverterCost + self.EquipmentCost + self.LaborCost + self.OverheadCost)
@@ -249,8 +265,10 @@ class CapitalCostModel(BaseModel):
 
 class OperatingCostModel(BaseModel):
     def __init__(self):
+        super().__init__()
         self.AnnualCost = 0.01
         self.AnnualCostByCapacity = 15
+        self.S2 = datetime.datetime.now()
 
     def render(self):
         return html.Div(
@@ -267,6 +285,7 @@ class OperatingCostModel(BaseModel):
 
 class FinanceModel(BaseModel):
     def __init__(self):
+        super().__init__()
         self.Term = 10
         self.StartYear = datetime.date.today().year + 1
         self.InflationRate = 2.5
@@ -274,6 +293,7 @@ class FinanceModel(BaseModel):
         self.StateTaxRate = 7
         self.PropertyTaxRate = 1.5
         self.SalesTaxRate = 6.25
+        self.S2 = datetime.datetime.now()
 
     @property
     def StartDate(self):
@@ -319,7 +339,9 @@ class FinanceModel(BaseModel):
 
 class DiscountModel(BaseModel):
     def __init__(self):
+        super().__init__()
         self.DiscountCurve = self.discount_curve()
+        self.S2 = datetime.datetime.now()
 
     def discount_curve(self):
         df = pandas.read_csv('Assets/discount_curve.csv', index_col=0).rename(pandas.to_datetime).resample('d').interpolate()
@@ -331,12 +353,14 @@ class DiscountModel(BaseModel):
 
 class WeatherModel(BaseModel):
     def __init__(self, models):
+        super().__init__()
         self.Models = models
         self.update_model(self.Models)
         self.SolarResourceFile = self.resource_file()
         self.Fixed = self.pull_historical()
         self.AverageDNI = self.Fixed['DNI'].mean()
         self.AverageDHI = self.Fixed['DHI'].mean()
+        self.S2 = datetime.datetime.now()
 
     def __repr__(self):
         return self.__class__.__name__ + ' ' + self.LocationModel.Name
@@ -370,6 +394,7 @@ class WeatherModel(BaseModel):
 
 class SolarModel(BaseModel):
     def __init__(self, models):
+        super().__init__()
         self.update_model(models, False)
         self.Tilt = self.optimal_angle()
         self.LCOEReal = 0
@@ -378,6 +403,7 @@ class SolarModel(BaseModel):
         self.CapacityFactor = self.Unfixed.MW.sum() / self.Unfixed.MW.count() / self.TechnologyModel.Capacity
         self.HourlyProfile = self.Unfixed.groupby(['Month', 'HourEnding'])['MW'].sum().unstack()
         self.AverageMW = self.Unfixed.MW.mean()
+        self.S2 = datetime.datetime.now()
 
     def __repr__(self):
         return self.__class__.__name__ + ' ' + self.LocationModel.Name
@@ -430,8 +456,24 @@ class SolarModel(BaseModel):
                     'gcr': self.TechnologyModel.GCR,
                 },
                 'SolarResource': {
-                    'use_wf_albedo': 1,
-                    'solar_resource_file': self.WeatherModel.SolarResourceFile
+                    'solar_resource_data': {
+                        'lat': self.LocationModel.Lat,
+                        'lon': self.LocationModel.Long,
+                        'elev': self.WeatherModel.Elevation,
+                        'tz': -6,
+                        'dn': tuple(df['DNI']),
+                        'df': tuple(df['DHI']),
+                        'gh': tuple(df['GHI']),
+                        'tdry': tuple(df['Temperature']),
+                        'wspd': tuple(df['Wind Speed']),
+                        'year': tuple(df.Year - 20),
+                        'month': tuple(df.Month),
+                        'day': tuple(df.Day),
+                        'hour': tuple(df.Hour),
+                        'minute': tuple(df.Hour * 0),
+                        'albedo': tuple(df['Surface Albedo']),
+                        'use_wf_albedo': 1,
+                    }
                 },
             }
         )
@@ -527,6 +569,7 @@ class SolarModel(BaseModel):
 
 class CannibalizationModel(BaseModel):
     def __init__(self, zone, models):
+        super().__init__()
         self.Models = models
         self.Zone = zone
         self.update_model(models)
@@ -534,6 +577,7 @@ class CannibalizationModel(BaseModel):
         self.CapacityData = self.capacity_data()
         self.Fixed = self.hist_vgr()
         self.Unfixed = self.fwd_vgr()
+        self.S2 = datetime.datetime.now()
 
     def data(self):
         df = pandas.read_csv('Assets/renewable_data.csv')
@@ -592,11 +636,13 @@ class CannibalizationModel(BaseModel):
 
 class RECModel(BaseModel):
     def __init__(self, models):
+        super().__init__()
         self.Models = models
         self.update_model(models)
         self.RECMap = self.rec_map()
         self.RECPrices = self.rec_prices()
         self.Unfixed = self.forward_rec_prices()
+        self.S2 = datetime.datetime.now()
 
     def rec_map(self):
         return set(self.PeriodModel.ForwardMerge.DateMonth.apply(lambda x: f'Credit REC TX CRS Solar {"Front" if x.month < 6 else "Back"} Half {x.year}'))
@@ -615,12 +661,14 @@ class RECModel(BaseModel):
 
 class EnergyModel(BaseModel):
     def __init__(self, zone, models):
+        super().__init__()
         self.Zone = zone
         self.update_model(models)
         self.Fixed = self.settles()
         self.Forwards = self.forwards()
         self.Scalars = self.scalars()
         self.Unfixed = self.datacurves()
+        self.S2 = datetime.datetime.now()
 
     def __repr__(self):
         return self.__class__.__name__ + ' ' + self.Zone
@@ -669,6 +717,7 @@ class EnergyModel(BaseModel):
 
 class Model(BaseModel):
     def __init__(self, models):
+        super().__init__()
         self.Models = models
         self.update_model(self.Models)
         self.WeatherModel = WeatherModel([self.LocationModel, self.PeriodModel])
@@ -686,10 +735,12 @@ class Model(BaseModel):
             self.RECModel
         ])
         self.update_model([self.WeatherModel, self.SolarModel, self.MarketModel])
+        self.S2 = datetime.datetime.now()
 
 
 class Models(BaseModel):
     def __init__(self):
+        super().__init__()
         self.Term = 5
         self.StartDate = datetime.datetime.now()
         self.End = datetime.date.today() + datetime.timedelta(days=365)
@@ -705,26 +756,30 @@ class Models(BaseModel):
         self.CapitalCostModel = CapitalCostModel()
         self.FinanceModel = FinanceModel()
         self.RunModel = RunModel([self])
+        self.S2 = datetime.datetime.now()
 
 
 class RunModel(BaseModel):
     def __init__(self, models):
+        super().__init__()
         self.ModelsIn = models
         self.update_model(models)
         self.RunTacker = 0
+        self.S2 = datetime.datetime.now()
 
     def build_mode(self, location):
         return Model(
-            [location,
-             self.PeriodModel,
-             self.MarketModel,
-             self.EnergyModels[location.Zone],
-             self.TechnologyModel,
-             self.OperatingCostModel,
-             self.CapitalCostModel,
-             self.FinanceModel,
-             self.CannibModels[location.Zone],
-             self.RECModel
+            [
+                location,
+                self.PeriodModel,
+                self.MarketModel,
+                self.EnergyModels[location.Zone],
+                self.TechnologyModel,
+                self.OperatingCostModel,
+                self.CapitalCostModel,
+                self.FinanceModel,
+                self.CannibModels[location.Zone],
+                self.RECModel
              ]
         )
 
