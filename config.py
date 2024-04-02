@@ -3,6 +3,8 @@ from geopy.geocoders import Nominatim
 import json
 from timezonefinder import TimezoneFinder
 
+
+
 COUNTIES = pandas.read_csv("Config/Texas_Counties_Centroid_Map.csv")
 
 LAND_PRICES = json.load(open('Config/land_prices.json'))

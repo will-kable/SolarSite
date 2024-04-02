@@ -6,10 +6,10 @@ import os
 import PySAM.PySSC as pssc
 import PySAM.Pvwattsv8 as PVW
 import PySAM.Merchantplant as MERC
-import PySAM.Utilityrate5 as UTL
 import PySAM.Grid as GRID
+import itertools
 import PySAM.ResourceTools as RT
-
+from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 import numpy
 import pandas
@@ -74,11 +74,13 @@ class PeriodModel(BaseModel):
         self.EndDate = ed
         self.TimeZone = timezone
         self.Forward = pandas.date_range(sd, ed + datetime.timedelta(days=1), freq='h', tz=self.TimeZone)[1:]
-        self.ForwardExtra = pandas.date_range(sd - datetime.timedelta(days=1), ed + datetime.timedelta(days=2), freq='h', tz=self.TimeZone)[1:]
         self.ForwardMerge = self.attributes(self.Forward)
-        self.ForwardMergeExtra = self.attributes(self.ForwardExtra)
+        # self.ForwardExtra = pandas.date_range(sd - datetime.timedelta(days=1), ed + datetime.timedelta(days=2), freq='h', tz=self.TimeZone)[1:]
 
+        # self.ForwardMergeExtra = self.attributes(self.ForwardExtra)
         self.Years = list(range(self.StartDate.year, self.EndDate.year + 1))
+        self.CashFlowYears = list(range(self.StartDate.year-1, self.EndDate.year + 1))
+
     def __repr__(self):
         return f'{self.__class__.__name__} {self.StartDate} {self.EndDate} {self.TimeZone}'
 
@@ -95,8 +97,7 @@ class PeriodModel(BaseModel):
             'HourEnding': lambda x: (x.hour + 1).values,
             'Date': lambda x: x.date,
             'DayOfYear': lambda x: x.dayofyear.values,
-            # 'DateMonth': hb.to_period('M').to_timestamp().date,
-            # 'Minute': hb.minute.values,
+            'DateMonth': lambda x: x.to_period('M').to_timestamp().date,
             'TimeShape': lambda x: x.map(timeshape).values,
         }
         attr = {key: funcs[key](hb) for key in (cols if cols else funcs)}
@@ -337,22 +338,15 @@ class WeatherModel(BaseModel):
     def __init__(self, models):
         self.Models = models
         self.update_model(self.Models)
+        self.SolarResourceFile = self.resource_file()
         self.Fixed = self.pull_historical()
         self.AverageDNI = self.Fixed['DNI'].mean()
         self.AverageDHI = self.Fixed['DHI'].mean()
-        self.Unfixed = self.projected()
 
     def __repr__(self):
         return self.__class__.__name__ + ' ' + self.LocationModel.Name
 
-    def projected(self):
-        df = self.Fixed
-        df = pandas.concat([df.assign(Year=year) for year in self.PeriodModel.Years])
-        idx = pandas.to_datetime(df[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(f'Etc/GMT+{-self.TimeZone}').dt.tz_convert('US/Central')
-        df = df.assign(HourEnding=idx.dt.hour+1).set_index(idx).sort_index().shift(freq='1h')
-        return df
-
-    def pull_historical(self):
+    def resource_file(self):
         lon, lat = self.LocationModel.Long, self.LocationModel.Lat
         fetcher = RT.FetchResourceFiles(
             'solar',
@@ -362,14 +356,17 @@ class WeatherModel(BaseModel):
             workers=512,
             verbose=False,
         )
-        fetcher = fetcher.fetch([(lon, lat)])
 
-        info = pandas.read_csv(fetcher.resource_file_paths[0], nrows=1)
+        fetcher = fetcher.fetch([(lon, lat)])
+        return fetcher.resource_file_paths[0]
+
+    def pull_historical(self):
+        info = pandas.read_csv(self.SolarResourceFile, nrows=1)
         timezone, elevation = info['Local Time Zone'], info['Elevation']
         self.TimeZone = timezone[0]
         self.Elevation = elevation[0]
         df = pandas.read_csv(
-            fetcher.resource_file_paths[0],
+            self.SolarResourceFile,
             skiprows=2,
             usecols=lambda x: 'Unnamed' not in x
         )
@@ -387,7 +384,6 @@ class SolarModel(BaseModel):
         self.HourlyProfile = self.Unfixed.groupby(['Month', 'HourEnding'])['MW'].sum().unstack()
         self.AverageMW = self.Unfixed.MW.mean()
 
-
     def __repr__(self):
         return self.__class__.__name__ + ' ' + self.LocationModel.Name
 
@@ -403,26 +399,30 @@ class SolarModel(BaseModel):
         direct = self.CapitalCostModel.direct_cost(self.TechnologyModel.Capacity)
         indirect = self.CapitalCostModel.indirect_cost(self.TechnologyModel.Capacity)
         land = self.LocationModel.LandCost(self.TechnologyModel.LandArea)
-        sales = self.FinanceModel.SalesTaxRate * (direct)
+        sales = self.FinanceModel.SalesTaxRate/100 * (direct)
         return direct + indirect + land + sales
+
+    def total_construction_financing_cost(self):
+        princ = self.total_installed_cost()
+        interest = princ * 6.5 / 100 / 12 * 6 / 2
+        upfront = princ * 1 / 100
+        return interest + upfront
 
     def simulate(self):
         print('Simulating: ', self.LocationModel.Name, self.LocationModel.Index)
-        df = self.WeatherModel.Unfixed.copy()
+        df = self.WeatherModel.Fixed
 
-        # Prices
-        energy_prices = self.EnergyModel.Unfixed.loc[df.index]
-        cannib_prices = self.EnergyModel.Unfixed.loc[df.index] * 0
-        ancila_prices = self.EnergyModel.Unfixed.loc[df.index] * 0
-
-        ssc = pssc.PySSC()
-        wfd = ssc.data_create()
-        new = MERC.default('PVWattsMerchantPlant')
+        # Initialize the Models
         PV_MODEL = PVW.default('PVWattsMerchantPlant')
         MERC_MODEL = MERC.default('PVWattsMerchantPlant')
 
         PV_MODEL.assign(
             {
+                'Lifetime': {
+                    'analysis_period': self.FinanceModel.Term,
+                    'system_use_lifetime_output': 1,
+                    'dc_degradation': [self.TechnologyModel.DegradationRate],
+                },
                 'SystemDesign': {
                     'system_capacity': self.TechnologyModel.Capacity*1000,
                     'dc_ac_ratio': self.TechnologyModel.DCRatio,
@@ -435,24 +435,8 @@ class SolarModel(BaseModel):
                     'gcr': self.TechnologyModel.GCR,
                 },
                 'SolarResource': {
-                    'solar_resource_data': {
-                        'lat': self.LocationModel.Lat,
-                        'lon': self.LocationModel.Long,
-                        'elev': self.WeatherModel.Elevation,
-                        'tz': -6,
-                        'dn': tuple(df['DNI']),
-                        'df': tuple(df['DHI']),
-                        'gh': tuple(df['GHI']),
-                        'tdry': tuple(df['Temperature']),
-                        'wspd': tuple(df['Wind Speed']),
-                        'year': tuple(df.Year - 20),
-                        'month': tuple(df.Month),
-                        'day': tuple(df.Day),
-                        'hour': tuple(df.Hour),
-                        'minute': tuple(df.Hour * 0),
-                        'albedo': tuple(df['Surface Albedo']),
-                        'use_wf_albedo': 1,
-                    }
+                    'use_wf_albedo': 1,
+                    'solar_resource_file': self.WeatherModel.SolarResourceFile
                 },
             }
         )
@@ -460,10 +444,24 @@ class SolarModel(BaseModel):
         PV_MODEL.execute()
         out_solar = PV_MODEL.Outputs.export()
 
+        # Build the Solar Models
+        gen = pandas.concat([df.assign(Year=year) for year in self.PeriodModel.Years])
+        idx = pandas.to_datetime(gen[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(f'Etc/GMT+{-self.WeatherModel.TimeZone}').dt.tz_convert('US/Central')
+        gen = gen.assign(HourEnding=idx.dt.hour+1).set_index(idx).sort_index().shift(freq='1h').assign(Gen=out_solar['gen'])
+
+        # Build the price models
+        energy_prices = self.EnergyModel.Unfixed.reindex(gen.index).fillna(0)
+        cannib_prices = self.CannibalizationModel.Unfixed.reindex(gen.index).fillna(0) * self.MarketModel.IncludeCannib
+        rec_prices = self.RECModel.Unfixed.reindex(gen.index).fillna(0) * self.MarketModel.IncludeRECs
+        final_prices = energy_prices + cannib_prices + rec_prices
+
         MERC_MODEL.assign(
             {
                 'SystemOutput': {
-                    'gen': out_solar['gen']
+                    'gen': tuple(gen['Gen']),
+                    'system_pre_curtailment_kwac': tuple(gen['Gen']),
+                    'degradation': [self.TechnologyModel.DegradationRate],
+                    'system_capacity': self.TechnologyModel.Capacity*1000,
                 },
                 'FinancialParameters': {
                     'analysis_period': len(self.PeriodModel.Years),
@@ -472,17 +470,20 @@ class SolarModel(BaseModel):
                     'state_tax_rate': [self.FinanceModel.StateTaxRate],
                     'federal_tax_rate': [self.FinanceModel.FederalTaxRate],
                     'system_capacity': self.TechnologyModel.Capacity * 1000,
+                    'debt_option': 0,
+                    'term_tenor': 5,
+
                 },
                 'Revenue': {
-                    'flip_target_percent': 15,
-                    'flip_target_year': 25,
-                    'mp_energy_market_revenue_single': energy_prices.to_frame().to_records(index=False).tolist()
+                    'mp_energy_market_revenue_single': final_prices.to_frame().to_records(index=False).tolist(),
+                    'mp_market_percent_gen': 100,
+                },
+                'Lifetime': {
+                    'system_use_lifetime_output': 1
                 },
 
-
-
                 'SystemCosts': {
-                    'om_capacity': [self.OperatingCostModel.AnnualCost],
+                    'om_capacity': [self.OperatingCostModel.AnnualCost * 1000],
                     'total_installed_cost': self.total_installed_cost(),
                 }
 
@@ -491,12 +492,35 @@ class SolarModel(BaseModel):
 
         MERC_MODEL.execute()
         out_merc = MERC_MODEL.Outputs.export()
-
+        # test = pandas.concat([pandas.Series(val).to_frame(key) for key, val in out_merc.items() if
+        #                     isinstance(val, tuple) and len(val) == 11], axis=1)
+        # test.T.to_csv('test.csv')
+        self.FairValue = sum(out_merc['cf_energy_market_revenue']) / (sum(out_merc['cf_energy_net']) / 1000)
         self.LCOEReal = out_merc['lcoe_real']
         self.LCOENom = out_merc['lcoe_nom']
+        self.CashFlowTable = pandas.concat([
+            pandas.Series(out_merc['cf_energy_net']).to_frame('Net Energy (MWh)')/1000,
+            pandas.Series(out_merc['cf_energy_market_revenue']).to_frame('Net Energy Revenue ($)'),
+            pandas.Series(out_merc['cf_om_capacity_expense']).to_frame('O/M Expense ($)') * -1,
+            pandas.Series(out_merc['cf_property_tax_expense']).to_frame('Property Tax Expense ($)') * -1,
+            pandas.Series(out_merc['cf_operating_expenses']).to_frame('Total Operating Expense ($)') * -1,
+            pandas.Series(out_merc['cf_ebitda']).to_frame('EBITDA ($)'),
+            pandas.Series(out_merc['cf_reserve_interest']).to_frame('Interest on Reserves ($)'),
+            pandas.Series(out_merc['cf_debt_payment_interest']).to_frame('Debt Interest Payment ($)') * -1,
+            pandas.Series(out_merc['cf_project_operating_activities']).to_frame('Cash Flow Operating Activities ($)'),
+            pandas.Series([self.total_installed_cost()]).to_frame('Total Installed Cost ($)'),
+            pandas.Series([MERC_MODEL.Outputs.cost_debt_upfront]).to_frame('Debt up-front Cost ($)'),
+            pandas.Series([self.total_construction_financing_cost()]).to_frame('Construction Financing Cost ($)'),
+            pandas.Series(out_merc['cf_project_dsra']).to_frame('Debt Service Decrease/Reserve Increase ($)'),
+            pandas.Series(out_merc['cf_project_wcra']).to_frame('Working Capital Decrease/Reserve Increase ($)'),
+            pandas.Series(out_merc['cf_project_investing_activities']).to_frame('Cash Flow Investing ($)'),
+            pandas.Series(out_merc['cf_project_financing_activities']).to_frame('Cash Flow Financing ($)'),
+            pandas.Series(out_merc['cf_pretax_cashflow']).to_frame('Total Pre-tax Cash Flow ($)'),
+        ], axis=1).set_axis(self.PeriodModel.CashFlowYears)
+
         mws = numpy.array(out_solar['gen'])/1000
-        df = df.assign(MW=mws)
-        return df
+        gen = gen.assign(MW=mws)
+        return gen
 
     def projected(self):
         grp = self.Fixed.groupby(['Month', 'HourEnding'])['MW'].mean().reset_index()
@@ -508,15 +532,87 @@ class SolarModel(BaseModel):
         return fwd * deg
 
 class CannibalizationModel(BaseModel):
+    def __init__(self, zone, models):
+        self.Models = models
+        self.update_model(models)
+        self.Data = self.data()
+        self.CapacityData = self.capacity_data()
+        self.Fixed = self.hist_vgr()
+        self.Unfixed = self.fwd_vgr()
+
+    def data(self):
+        df = pandas.read_csv('Assets/renewable_data.csv')
+        df.index = pandas.to_datetime(df['index'], utc='True').dt.tz_convert('US/Central')
+        df = df.drop(['index'], axis=1)
+        df = self.PeriodModel.attributes(df)
+        df = df.join(self.EnergyModel.Fixed.set_axis(['Price'], axis=1)).sort_index().dropna()
+        df = df.assign(
+            FixedSolar=df.groupby(['Month', 'HourEnding'])['Solar'].transform('mean'),
+            FixedWind=df.groupby(['Month', 'HourEnding'])['Wind'].transform('mean'),
+        )
+
+        temp_data = pandas.read_csv('Assets/temperature_data.csv')
+        temp_data.index = pandas.to_datetime(temp_data['index'], utc='True').dt.tz_convert('US/Central')
+        temp_data = temp_data.drop(['index'], axis=1)
+
+        df = df.join(temp_data)
+        return df
+
+    def capacity_data(self):
+        return pandas.read_csv('Assets/forward_capacity.csv', index_col=0).rename(lambda x: pandas.to_datetime(x).date())
+
+    def hist_vgr(self):
+        df = self.Data
+        fixed = df.groupby(['DateMonth', 'TimeShape']).apply(lambda x: numpy.average(x['Price'], weights=x['FixedSolar'].clip(0.001), axis=0))
+        volum = df.groupby(['DateMonth', 'TimeShape']).apply(lambda x: numpy.average(x['Price'], weights=x['Solar'].clip(0.001), axis=0))
+        vgr = (volum / fixed).unstack()
+        return vgr
+
+    def fwd_vgr(self):
+        df = self.Data
+        hist_vgr = self.Fixed
+        forw_cap = self.CapacityData['Forecast'].dropna()
+        hist_cap = df['Solar Cap'].shift(freq='-1min').groupby(lambda x: x.date().replace(day=1)).max()
+        mont_vgr = hist_vgr.groupby(lambda x: x.month).mean()
+        out = []
+        for month in range(1,13):
+            temp_month_cap = hist_cap[hist_cap.index.map(lambda x: x.month==month)]
+            temp_month_vgr = hist_vgr[hist_vgr.index.map(lambda x: x.month==month)]
+            temp_month_fwd = forw_cap[forw_cap.index.map(lambda x: x.month==month)]
+            temp = []
+            for timeshape in ['5x16', '2x16', '7x8']:
+                model = LinearRegression()
+                model.fit(temp_month_cap.to_frame(), temp_month_vgr[timeshape])
+                predi = model.predict(temp_month_fwd.to_frame('Solar Cap'))
+                temp.append(pandas.Series(predi, index=temp_month_fwd.index).to_frame(timeshape))
+            out.append(pandas.concat(temp, axis=1))
+        out = pandas.concat(out).sort_index()
+        out = out.reset_index().melt(id_vars='index').set_axis(['DateMonth', 'TimeShape', 'Scalar'], axis=1)
+        out = self.PeriodModel.ForwardMerge.merge(out).set_index('index')['Scalar'] - 1
+        return out * self.EnergyModel.Unfixed.loc[out.index]
+
+class RECModel(BaseModel):
     def __init__(self, models):
         self.Models = models
         self.update_model(models)
-    def renewable_data(self):
-        return pandas.read_csv('Assets/renewable_data.csv', index_col=0)
+        self.RECMap = self.rec_map()
+        self.RECPrices = self.rec_prices()
+        self.Unfixed = self.forward_rec_prices()
 
-def RECModel(BaseModel):
-    def __init__(self, models):
-        self.Models = models
+    def rec_map(self):
+        return set(self.PeriodModel.ForwardMerge.DateMonth.apply(lambda x: f'Credit REC TX CRS Solar {"Front" if x.month < 6 else "Back"} Half {x.year}'))
+
+    def rec_prices(self):
+        return {i: pandas.read_csv(f'data/Prices/RECS/{i}.csv', index_col=0).rename(lambda x: pandas.to_datetime(x).date()) for i in self.RECMap}
+
+    def forward_rec_prices(self):
+        fwd = self.PeriodModel.ForwardMerge
+        prices = self.RECPrices
+        def get_price(date):
+            label = f'Credit REC TX CRS Solar {"Front" if date.month < 6 else "Back"} Half {date.year}'
+            return prices[label].loc[date, 'value']
+        out = fwd['DateMonth'].apply(get_price).set_axis(fwd.index)
+        return out
 
 class EnergyModel(BaseModel):
     def __init__(self, zone, models):
@@ -542,11 +638,12 @@ class EnergyModel(BaseModel):
 
     def scalars(self):
         return json.loads(open(f'data/Prices/Energy/Scalars/{self.Zone}_scalars.json').read())
+
     def datacurves(self):
         fwds = self.Forwards
         fwds_merge1 = fwds.reset_index().melt(id_vars='index').set_axis(['Date', 'TimeShape', 'Price'], axis=1).dropna()
         fwds_merge2 = fwds.reset_index().melt(id_vars='index').set_axis(['DateMonth', 'TimeShape', 'Price'], axis=1).dropna()
-        mrg = self.PeriodModel.ForwardMergeExtra
+        mrg = self.PeriodModel.ForwardMerge
         mrg = mrg.assign(Price=mrg.merge(fwds_merge1, how='left')['Price'].fillna(mrg.merge(fwds_merge2, how='left')['Price']).values)
         scalars = self.Scalars
         last_year = max([int(i.split('-')[-1]) for i in scalars])
@@ -571,50 +668,6 @@ class EnergyModel(BaseModel):
         return fwds_curve
 
 
-class ValueModel(BaseModel):
-    def __init__(self, models):
-        self.Models = models
-        self.update_model(self.Models, False)
-        self.Value = self.EnergyModel.Unfixed * self.SolarModel.Unfixed.MW
-        self.IncomeDF = self.IncomeDF()
-        self.FairValue = self.IncomeDF['Total Revenue ($)'].sum() / self.IncomeDF['MWh'].sum()
-
-    def __repr__(self):
-        return self.__class__.__name__ + ' ' + self.LocationModel.Name
-
-    def IncomeDF(self, grouping='YS'):
-        mws = self.SolarModel.Unfixed.MW
-        pxs = self.EnergyModel.Unfixed
-
-        def price_value(px):
-            temp = mws * px
-            temp = temp.groupby(temp.shift(freq='-1min').index.date).sum()
-            return temp * temp.index.map(self.EnergyModel.DiscountModel.discount)
-
-        daily_mws = price_value(1)
-        ene_value = price_value(pxs)
-        rec_value = ene_value * 0
-        anc_value = ene_value * 0
-        can_value = ene_value * 0
-        ptc_fed_value = daily_mws * self.MarketModel.FederalPTC
-        ptc_sta_value = daily_mws * self.MarketModel.StatePTC
-        total_rev = ene_value + rec_value + anc_value + can_value + ptc_sta_value
-        df = pandas.concat([daily_mws, ene_value, rec_value, anc_value, can_value, ptc_fed_value, ptc_sta_value, total_rev], axis=1)
-        df = df.rename(pandas.to_datetime).resample(grouping).sum().set_axis([
-            'MWh',
-            'Energy Value ($)',
-            'REC Value ($)',
-            'Ancillary Value ($)',
-            'Cannibalization Value ($)',
-            'Federal PTC Value ($)',
-            'State PTC Value ($)',
-            'Total Revenue ($)'
-        ], axis=1)
-        return df
-
-    def ExpensesDF(self):
-        return 1
-
 class Model(BaseModel):
     def __init__(self, models):
         self.Models = models
@@ -630,18 +683,10 @@ class Model(BaseModel):
             self.FinanceModel,
             self.OperatingCostModel,
             self.CapitalCostModel,
+            self.CannibalizationModel,
+            self.RECModel
         ])
-        self.ValueModel = ValueModel([
-            self.LocationModel,
-            self.TechnologyModel,
-            self.SolarModel,
-            self.MarketModel,
-            self.EnergyModel,
-            self.FinanceModel,
-            self.OperatingCostModel,
-            self.CapitalCostModel
-        ])
-        self.update_model([self.WeatherModel, self.SolarModel, self.MarketModel, self.ValueModel])
+        self.update_model([self.WeatherModel, self.SolarModel, self.MarketModel])
 
 
 class Models(BaseModel):
@@ -651,7 +696,7 @@ class Models(BaseModel):
         self.End = datetime.date.today() + datetime.timedelta(days=365)
         self.Lats = COUNTIES['X (Lat)'].tolist()
         self.Longs = COUNTIES['Y (Long)'].tolist()
-        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:1]
+        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)]
         self.Zones = set([i.Zone for i in self.Locations])
         self.TimeZones = set([i.TimeZone for i in self.Locations])
         self.TechnologyModel = TechnologyModel()
@@ -679,6 +724,8 @@ class RunModel(BaseModel):
              self.OperatingCostModel,
              self.CapitalCostModel,
              self.FinanceModel,
+             self.CannibModels[location.Zone],
+             self.RECModel
              ]
         )
 
@@ -688,6 +735,8 @@ class RunModel(BaseModel):
     def rebuild(self):
         self.PeriodModel = PeriodModel(self.FinanceModel.StartDate, self.FinanceModel.EndDate, 'US/Central')
         self.EnergyModels = {i: EnergyModel(i, [self.PeriodModel, self.DiscountModel, self.MarketModel]) for i in self.Zones}
+        self.CannibModels = {i: CannibalizationModel(i, [self.PeriodModel, self.DiscountModel, self.EnergyModels[i]]) for i in self.Zones}
+        self.RECModel = RECModel([self.PeriodModel])
         with Pool() as pool:
             self.Models = pool.map(self.build_mode, self.Locations)
         # self.Models = [self.build_mode(i) for i in self.Locations]
@@ -816,6 +865,7 @@ def setup_app(model):
 
     @app.callback(
         dash.dependencies.Output({"type": 'data_table', "name": MATCH}, 'data'),
+        dash.dependencies.Output({"type": 'data_table', "name": MATCH}, 'columns'),
         dash.dependencies.Output({"type": 'x-graph', "name": MATCH}, 'figure'),
         dash.dependencies.Input({"type": "map", "name": MATCH}, "clickData"),
     )
@@ -833,7 +883,7 @@ def setup_app(model):
         graph = county_model.HourlyProfile.T
 
         #Update the Graph
-        dct = {
+        plt_dct = {
             'data': [{'x': graph.index, 'y': graph[i], 'type': 'line', 'name': i} for i in graph.columns],
             'layout': {
                 'title': {'text': f'{county} Hourly Generation Profile'},
@@ -846,9 +896,10 @@ def setup_app(model):
         # patched_figure['layout']['yaxis'].update({'range': [0, graph.max(axis=1).max() * 1.1]})
 
         # Update the DataTable
-        df = county_model.IncomeDF.reset_index().to_dict('records')
-
-        return df, dct
+        data = county_model.CashFlowTable.T.reset_index()
+        tab_data = data.round(2).to_dict('records')
+        tab_cols = [{"name": str(i), "id": str(i)} for i in data.columns]
+        return tab_data, tab_cols, plt_dct
 
     @app.callback(
         dash.dependencies.Output('tabs', 'children', allow_duplicate=True),
@@ -868,8 +919,10 @@ def setup_app(model):
     app.run_server(debug=True, use_reloader=False)
 
 
+
 if __name__ == "__main__":
+    app = Dash(__name__)
     model = Models()
-    # setup_app(model)
-    model.RunModel.rebuild()
-    self = model.RunModel.Models[0].SolarModel
+    setup_app(model)
+    # model.RunModel.rebuild()
+    # self = model.RunModel.Models[0].SolarModel
