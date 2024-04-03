@@ -32,8 +32,10 @@ timeout = 60
 plt.interactive(True)
 
 class BaseModel:
-    def __init__(self):
+    def __init__(self, models=[], update_sub_parmas=True):
         self.S1 = datetime.datetime.now()
+        self.update_model(models, update_sub_parmas)
+        self.ModelsIn = models
 
     @property
     def ExecutionTime(self):
@@ -64,7 +66,7 @@ class LocationModel(BaseModel):
         self.TimeZone = FINDER.timezone_at(lng=self.Long, lat=self.Lat)
         self.Zone = closest_key(ZONAL_MAP, (lat, long))
         self.LandPrice = LAND_PRICES[self.Name]['Data']['2023']
-        self.PropertyTax = PROP_TAXES[self.Name]/100
+        self.PropertyTax = PROP_TAXES[self.Name]
         self.LandRegion = LAND_PRICES[self.Name]['Region']
         self.S2 = datetime.datetime.now()
 
@@ -93,25 +95,23 @@ class PeriodModel(BaseModel):
     def __repr__(self):
         return f'{self.__class__.__name__} {self.StartDate} {self.EndDate} {self.TimeZone}'
 
-    def attributes(self, df, cols=None):
+    def attributes(self, df):
         if not isinstance(df, pandas.DataFrame):
             df = df.to_frame('index').set_axis(['index'], axis=1)
         hb = df.shift(freq='-1h').index
-        funcs = {
-            'Year': lambda x: x.year.values,
-            'Month': lambda x: x.month.values,
-            'Mon': lambda x: x.strftime('%b').values,
-            'Day': lambda x: x.day.values,
-            'Hour': lambda x: x.hour.values,
-            'HourEnding': lambda x: (x.hour + 1).values,
-            'Date': lambda x: x.date,
-            'DayOfYear': lambda x: x.dayofyear.values,
-            'DateMonth': lambda x: x.to_period('M').to_timestamp().date,
-            'TimeShape': lambda x: x.map(timeshape).values,
+        attr = {
+            'Year': hb.year,
+            'Month': hb.month,
+            'Day': hb.day,
+            'Hour': hb.hour,
+            'HourEnding': hb.hour + 1,
+            'Date': hb.date,
+            'DateMonth': pandas.to_datetime({'year': hb.year, 'month': hb.month, 'day': 1}).dt.date,
+            'TimeShape': hb.map(timeshape),
         }
-        attr = {key: funcs[key](hb) for key in (cols if cols else funcs)}
         df = df.reset_index().assign(**attr)
         df = df.assign(Idx=df.groupby(['Date', 'TimeShape'])['Year'].cumcount())
+        df = df.assign(DST=df.groupby(['Date', 'TimeShape'])['Year'].transform('count').isin([7, 9]))
         return df.set_index(df.columns[0]).rename_axis('index')
 
 
@@ -286,12 +286,11 @@ class OperatingCostModel(BaseModel):
 class FinanceModel(BaseModel):
     def __init__(self):
         super().__init__()
-        self.Term = 10
+        self.Term = 25
         self.StartYear = datetime.date.today().year + 1
         self.InflationRate = 2.5
         self.FederalTaxRate = 21
         self.StateTaxRate = 7
-        self.PropertyTaxRate = 1.5
         self.SalesTaxRate = 6.25
         self.S2 = datetime.datetime.now()
 
@@ -326,9 +325,6 @@ class FinanceModel(BaseModel):
                 html.P('State Tax Rate (%)'),
                 html.Br(),
                 dcc.Input(id={'type': 'param', 'name': 'StateTaxRate'}, type='number', placeholder=self.StateTaxRate),
-                html.P('Property Tax Rate (%)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'PropertyTaxRate'}, type='number', placeholder=self.PropertyTaxRate),
                 html.P('Sales Tax Rate (%)'),
                 html.Br(),
                 dcc.Input(id={'type': 'param', 'name': 'SalesTaxRate'}, type='number',placeholder=self.SalesTaxRate),
@@ -353,9 +349,7 @@ class DiscountModel(BaseModel):
 
 class WeatherModel(BaseModel):
     def __init__(self, models):
-        super().__init__()
-        self.Models = models
-        self.update_model(self.Models)
+        super().__init__(models)
         self.SolarResourceFile = self.resource_file()
         self.Fixed = self.pull_historical()
         self.AverageDNI = self.Fixed['DNI'].mean()
@@ -394,8 +388,7 @@ class WeatherModel(BaseModel):
 
 class SolarModel(BaseModel):
     def __init__(self, models):
-        super().__init__()
-        self.update_model(models, False)
+        super().__init__(models, False)
         self.Tilt = self.optimal_angle()
         self.LCOEReal = 0
         self.LCOENom = 0
@@ -503,7 +496,7 @@ class SolarModel(BaseModel):
 
                 'FinancialParameters': {
                     'analysis_period': len(self.PeriodModel.Years),
-                    'property_tax_rate': self.LocationModel.PropertyTax * 100,
+                    'property_tax_rate': self.LocationModel.PropertyTax,
                     'inflation_rate': self.FinanceModel.InflationRate,
                     'state_tax_rate': [self.FinanceModel.StateTaxRate],
                     'federal_tax_rate': [self.FinanceModel.FederalTaxRate],
@@ -532,8 +525,8 @@ class SolarModel(BaseModel):
         out_merc = MERC_MODEL.Outputs.export()
 
         self.FairValue = sum(out_merc['cf_energy_market_revenue']) / (sum(out_merc['cf_energy_net']) / 1000)
-        self.LCOEReal = out_merc['lcoe_real']
-        self.LCOENom = out_merc['lcoe_nom']
+        self.LCOEReal = out_merc['lcoe_real'] * 10
+        self.LCOENom = out_merc['lcoe_nom'] * 10
         self.CashFlowTable = pandas.concat([
             pandas.Series(out_merc['cf_energy_net']).to_frame('Net Energy (MWh)')/1000,
             pandas.Series(out_merc['cf_energy_market_revenue']).to_frame('Net Energy Revenue ($)'),
@@ -569,13 +562,8 @@ class SolarModel(BaseModel):
 
 class CannibalizationModel(BaseModel):
     def __init__(self, zone, models):
-        super().__init__()
-        self.Models = models
+        super().__init__(models)
         self.Zone = zone
-        self.update_model(models)
-        self.Data = self.data()
-        self.CapacityData = self.capacity_data()
-        self.Fixed = self.hist_vgr()
         self.Unfixed = self.fwd_vgr()
         self.S2 = datetime.datetime.now()
 
@@ -589,11 +577,9 @@ class CannibalizationModel(BaseModel):
             FixedSolar=df.groupby(['Month', 'HourEnding'])['Solar'].transform('mean'),
             FixedWind=df.groupby(['Month', 'HourEnding'])['Wind'].transform('mean'),
         )
-
         temp_data = pandas.read_csv('Assets/temperature_data.csv')
         temp_data.index = pandas.to_datetime(temp_data['index'], utc='True').dt.tz_convert('US/Central')
         temp_data = temp_data.drop(['index'], axis=1)
-
         df = df.join(temp_data)
         return df
 
@@ -636,34 +622,26 @@ class CannibalizationModel(BaseModel):
 
 class RECModel(BaseModel):
     def __init__(self, models):
-        super().__init__()
-        self.Models = models
-        self.update_model(models)
-        self.RECMap = self.rec_map()
+        super().__init__(models)
         self.RECPrices = self.rec_prices()
         self.Unfixed = self.forward_rec_prices()
         self.S2 = datetime.datetime.now()
 
-    def rec_map(self):
-        return set(self.PeriodModel.ForwardMerge.DateMonth.apply(lambda x: f'Credit REC TX CRS Solar {"Front" if x.month < 6 else "Back"} Half {x.year}'))
-
     def rec_prices(self):
-        return {i: pandas.read_csv(f'data/Prices/RECS/{i}.csv', index_col=0).rename(lambda x: pandas.to_datetime(x).date()) for i in self.RECMap}
+        return pandas.read_csv(f'data/Prices/RECS/Forward/RECS.csv', index_col=[0, 1, 2]).reset_index()
 
     def forward_rec_prices(self):
         fwd = self.PeriodModel.ForwardMerge
         prices = self.RECPrices
-        def get_price(date):
-            label = f'Credit REC TX CRS Solar {"Front" if date.month < 6 else "Back"} Half {date.year}'
-            return prices[label].loc[date, 'value']
-        out = fwd['DateMonth'].apply(get_price).set_axis(fwd.index)
-        return out
+        prices = prices.melt(id_vars=['Year', 'Month']).set_axis(['Year', 'Month', 'RECMAP', 'Price'], axis=1)
+        rec_map = {x: f'Credit REC TX CRS Solar {"Front" if x.month < 6 else "Back"} Half {x.year}' for x in fwd.DateMonth}
+        fwd = fwd.assign(RECMAP=fwd['DateMonth'].map(rec_map))
+        return fwd.merge(prices)['Price'].ffill()
 
 class EnergyModel(BaseModel):
     def __init__(self, zone, models):
-        super().__init__()
+        super().__init__(models)
         self.Zone = zone
-        self.update_model(models)
         self.Fixed = self.settles()
         self.Forwards = self.forwards()
         self.Scalars = self.scalars()
@@ -681,45 +659,23 @@ class EnergyModel(BaseModel):
         df = pandas.read_csv(f'data/Prices/Energy/Forward/{self.Zone}_forwards.csv', index_col=0)
         df = df.set_axis(pandas.to_datetime(df.index))
         fill = pandas.concat([df] + [df[df.index.year == max(df.index.year)].rename(lambda x: x.replace(year=i)) for i in range(max(df.index.year) + 1, self.PeriodModel.EndDate.year + 1)])
-        return fill.rename(lambda x: x.date()).loc[self.PeriodModel.StartDate.replace(day=1): self.PeriodModel.EndDate.replace(day=1)]
+        return fill.rename(lambda x: x.date()).loc[self.PeriodModel.StartDate: self.PeriodModel.EndDate]
 
     def scalars(self):
-        return json.loads(open(f'data/Prices/Energy/Scalars/{self.Zone}_scalars.json').read())
+        return pandas.read_csv(f'data/Prices/Energy/Scalars/{self.Zone}_scalars.csv', index_col=0)
 
     def datacurves(self):
         fwds = self.Forwards
-        fwds_merge1 = fwds.reset_index().melt(id_vars='index').set_axis(['Date', 'TimeShape', 'Price'], axis=1).dropna()
-        fwds_merge2 = fwds.reset_index().melt(id_vars='index').set_axis(['DateMonth', 'TimeShape', 'Price'], axis=1).dropna()
+        fwds_merge = fwds.reset_index().melt(id_vars='index').set_axis(['DateMonth', 'TimeShape', 'Price'], axis=1).dropna()
         mrg = self.PeriodModel.ForwardMerge
-        mrg = mrg.assign(Price=mrg.merge(fwds_merge1, how='left')['Price'].fillna(mrg.merge(fwds_merge2, how='left')['Price']).values)
+        mrg = mrg.merge(fwds_merge, how='left')
         scalars = self.Scalars
-        last_year = max([int(i.split('-')[-1]) for i in scalars])
-
-        def map_forward(idx, scalars):
-            date, shape = idx.name
-            if len(idx) == 7:
-                scalars = scalars.get('Spring_DST', scalars.get(f'Spring_DST-{date.year}', scalars.get(f'Spring_DST-{last_year}')))
-            elif len(idx) == 9:
-                scalars = scalars.get('Fall_DST', scalars.get(f'Fall_DST-{date.year}', scalars.get(f'Spring_DST-{last_year}')))
-            else:
-                scalars = scalars.get(
-                    date.strftime('%b'),
-                    scalars.get(
-                        date.strftime('%d%b-%Y'),
-                        scalars.get(
-                            date.strftime('%b-%Y'),
-                            scalars.get(date.replace(year=last_year).strftime('%b-%Y')))))
-            return idx * scalars[shape]
-
-        fwds_curve = mrg.groupby(['Date', 'TimeShape'])['Price'].transform(map_forward, *[scalars]).set_axis(mrg['index'])
-        return fwds_curve
-
+        mrg = mrg.merge(scalars).set_index('index')
+        return (mrg['Price'] * mrg['Scalar']).sort_index()
 
 class Model(BaseModel):
     def __init__(self, models):
-        super().__init__()
-        self.Models = models
-        self.update_model(self.Models)
+        super().__init__(models)
         self.WeatherModel = WeatherModel([self.LocationModel, self.PeriodModel])
         self.SolarModel = SolarModel([
             self.LocationModel,
@@ -746,7 +702,7 @@ class Models(BaseModel):
         self.End = datetime.date.today() + datetime.timedelta(days=365)
         self.Lats = COUNTIES['X (Lat)'].tolist()
         self.Longs = COUNTIES['Y (Long)'].tolist()
-        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:5]
+        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)]
         self.Zones = set([i.Zone for i in self.Locations])
         self.TimeZones = set([i.TimeZone for i in self.Locations])
         self.TechnologyModel = TechnologyModel()
@@ -761,9 +717,7 @@ class Models(BaseModel):
 
 class RunModel(BaseModel):
     def __init__(self, models):
-        super().__init__()
-        self.ModelsIn = models
-        self.update_model(models)
+        super().__init__(models)
         self.RunTacker = 0
         self.S2 = datetime.datetime.now()
 
@@ -788,8 +742,8 @@ class RunModel(BaseModel):
 
     def rebuild(self):
         self.PeriodModel = PeriodModel(self.FinanceModel.StartDate, self.FinanceModel.EndDate, 'US/Central')
-        self.EnergyModels = {i: EnergyModel(i, [self.PeriodModel, self.DiscountModel, self.MarketModel]) for i in self.Zones}
-        self.CannibModels = {i: CannibalizationModel(i, [self.PeriodModel, self.DiscountModel, self.EnergyModels[i]]) for i in self.Zones}
+        self.EnergyModels = {i: EnergyModel(i, [self.PeriodModel]) for i in self.Zones}
+        self.CannibModels = {i: CannibalizationModel(i, [self.EnergyModels[i]]) for i in self.Zones}
         self.RECModel = RECModel([self.PeriodModel])
         with Pool() as pool:
             self.Models = pool.map(self.build_mode, self.Locations)
@@ -798,7 +752,7 @@ class RunModel(BaseModel):
 
     def build_dataframe(self):
         cols = ['Name', 'FIPS', 'Lat', 'Long', 'Zone', 'LandPrice', 'PropertyTax', 'FairValue', 'AverageDNI', 'AverageDHI', 'AverageMW', 'LCOEReal', 'LCOENom']
-        return pandas.DataFrame({col: [getattr(i, col) for i in self.Models] for col in cols})
+        return pandas.DataFrame({col: [getattr(i, col) for i in self.Models] for col in cols}).round(2)
 
     def render(self):
         return html.Div([html.Button('Run', id='run'), dcc.Input(id='model_name', value='Model1', type="text")])
@@ -926,9 +880,6 @@ def setup_app(model):
     def update_county_profile(clickData):
         if clickData is None:
             return no_update
-        # patched_table = Patch()
-        # patched_figure = Patch()
-
 
         name = dash.callback_context.args_grouping['id']['name']
         temp_model = model_cache.get(name, model)
@@ -975,8 +926,8 @@ def setup_app(model):
 
 
 if __name__ == "__main__":
-    app = Dash(__name__)
     model = Models()
-#     setup_app(model)
-    model.RunModel.rebuild()
-    self = model.RunModel.Models[0].SolarModel
+    setup_app(model)
+    # model.RunModel.rebuild()
+    # self = model.RunModel.Models[0].SolarModel
+    #
