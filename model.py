@@ -19,13 +19,13 @@ import plotly.express as px
 from dash import Dash, dcc, html, callback, ALL, MATCH, Input, State, Output, Patch, no_update
 import dash_bootstrap_components as dbc
 from common import closest_key, timeshape
-from config import COUNTIES, API_KEY_NREL, FINDER, ZONAL_MAP, GEO_JSON, LAND_PRICES, ARRAY_MAP, MODULE_MAP, MODULE_EFF, PROP_TAXES
+from config import *
 import dash_daq as daq
 from dateutil import relativedelta
 from flask_caching import Cache
 from copy import deepcopy
 from multiprocessing import Pool
-
+import geopy.distance
 
 timeout = 60
 
@@ -68,17 +68,28 @@ class LocationModel(BaseModel):
         self.LandPrice = LAND_PRICES[self.Name]['Data']['2023']
         self.PropertyTax = PROP_TAXES[self.Name]
         self.LandRegion = LAND_PRICES[self.Name]['Region']
+        self.TransDistanceDict = self.trans_distance()
         self.S2 = datetime.datetime.now()
 
     def __repr__(self):
         return self.Name
 
-    def LandCost(self, area):
+    def land_cost(self, area):
         return self.LandPrice * area
 
-    def LandTax(self, area):
-        return self.LandCost(area) * self.PropertyTax/100
+    def land_tax(self, area):
+        return self.land_cost(area) * self.PropertyTax/100
 
+    def trans_distance(self):
+        dct = {}
+        for voltage in {'220-287', '500', '100-161', '345'}:
+            key = f'{voltage.replace("-", "_")}_kV'
+            temp_df = TRANS_CORDS[TRANS_CORDS['Voltage'] == voltage]
+            idx = ((temp_df.Lat - self.Lat).pow(2) + (temp_df.Lon - self.Long).pow(2)).pow(0.5).idxmin()
+            cord = temp_df.loc[idx, ['Lat', 'Lon']].tolist()
+            dct[key] = geopy.distance.geodesic(cord, (self.Lat, self.Long)).miles
+            setattr(self, key, dct[key])
+        return {}
 
 class PeriodModel(BaseModel):
     def __init__(self, sd, ed, timezone):
@@ -412,7 +423,7 @@ class SolarModel(BaseModel):
     def total_installed_cost(self):
         direct = self.CapitalCostModel.direct_cost(self.TechnologyModel.Capacity)
         indirect = self.CapitalCostModel.indirect_cost(self.TechnologyModel.Capacity)
-        land = self.LocationModel.LandCost(self.TechnologyModel.LandArea)
+        land = self.LocationModel.land_cost(self.TechnologyModel.LandArea)
         sales = self.FinanceModel.SalesTaxRate/100 * (direct)
         return direct + indirect + land + sales
 
@@ -560,6 +571,7 @@ class SolarModel(BaseModel):
         deg = fwd.shift(freq='-1h').index.map(lambda x: (1-deg_rate)**(x.year - min_year))
         return fwd * deg
 
+
 class CannibalizationModel(BaseModel):
     def __init__(self, zone, models):
         super().__init__(models)
@@ -569,7 +581,7 @@ class CannibalizationModel(BaseModel):
 
     def data(self):
         df = pandas.read_csv('Assets/renewable_data.csv')
-        df.index = pandas.to_datetime(df['index'], utc='True').dt.tz_convert('US/Central')
+        df.index = pandas.to_datetime(df["index"], utc='True').dt.tz_convert('US/Central')
         df = df.drop(['index'], axis=1)
         df = self.PeriodModel.attributes(df)
         df = df.join(self.EnergyModel.Fixed.set_axis(['Price'], axis=1)).sort_index().dropna()
@@ -578,7 +590,7 @@ class CannibalizationModel(BaseModel):
             FixedWind=df.groupby(['Month', 'HourEnding'])['Wind'].transform('mean'),
         )
         temp_data = pandas.read_csv('Assets/temperature_data.csv')
-        temp_data.index = pandas.to_datetime(temp_data['index'], utc='True').dt.tz_convert('US/Central')
+        temp_data.index = pandas.to_datetime(temp_data["index"], utc='True').dt.tz_convert('US/Central')
         temp_data = temp_data.drop(['index'], axis=1)
         df = df.join(temp_data)
         return df
@@ -751,7 +763,7 @@ class RunModel(BaseModel):
         self.DF = self.build_dataframe()
 
     def build_dataframe(self):
-        cols = ['Name', 'FIPS', 'Lat', 'Long', 'Zone', 'LandPrice', 'PropertyTax', 'FairValue', 'AverageDNI', 'AverageDHI', 'AverageMW', 'LCOEReal', 'LCOENom']
+        cols = ['Name', 'FIPS', 'Lat', 'Long', 'Zone', 'LandPrice', 'PropertyTax', 'FairValue', 'AverageDNI', 'AverageDHI', 'AverageMW', 'LCOEReal', 'LCOENom', '100_161_kV', '220_287_kV', '345_kV', '500_kV']
         return pandas.DataFrame({col: [getattr(i, col) for i in self.Models] for col in cols}).round(2)
 
     def render(self):
@@ -810,7 +822,20 @@ def setup_app(model):
                     [
                         html.Div(
                             [
-                                dcc.Dropdown(model.RunModel.DF.columns, 'Zone', id={'type': 'map-select', 'name': model_name}),
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            dcc.Dropdown(model.RunModel.DF.columns, 'Zone', id={'type': 'map-select', 'name': model_name}),
+                                            style={'width': '60%', 'display': 'inline-block'}
+                                        ),
+                                        html.Div(
+                                            dcc.Dropdown(['None', 'All', '100-161', '220-287', '345', '500'], 'None', id={'type': 'trans-select', 'name': model_name}),
+                                            style={'width': '25%', 'display': 'inline-block'}
+                                        ),
+                                    ],
+                                    style={'display': 'flex', 'justify-content': 'space-between', 'height': '5vh'}
+
+                                ),
                                 dcc.Graph(
                                     id={'type': 'map', 'name': model_name},
                                     figure=px.choropleth(
@@ -825,20 +850,21 @@ def setup_app(model):
                                         color_continuous_scale='Viridis',
                                         basemap_visible=False,
                                         center={"lat": 31.391489, "lon": -99.174304}
-                                    )
+                                    ),
+                                    style={'height': '45vh'}
                                 )
-                            ], style={'width': '49%', 'display': 'inline-block'}
+                            ], style={'width': '50%', 'display': 'inline-block', 'vertical-align': 'top', 'border':'2px black solid'}
                         ),
 
                         html.Div(
                             [
-                                dcc.Graph(id={'type': 'x-graph', 'name': model_name}),
-                            ], style={'width': '49%', 'display': 'inline-block'}
+                                dcc.Graph(id={'type': 'x-graph', 'name': model_name}, style={'height': '50vh'}),
+                            ], style={'width': '50%', 'display': 'inline-block', 'vertical-align': 'top', 'border':'2px black solid'}
                         ),
 
                         html.Div(
                             [
-                                dash.dash_table.DataTable(id={'type': 'data_table', 'name': model_name}, export_format='csv'),
+                                dash.dash_table.DataTable(id={'type': 'data_table', 'name': model_name}, export_format='csv', style_table={'overflowX': 'scroll'}),
                                 html.Button('Delete Tab', id={'type': 'delete', 'name': model_name})
                             ]
                         )
@@ -852,11 +878,12 @@ def setup_app(model):
     @app.callback(
         dash.dependencies.Output({"type": "map", "name": MATCH}, 'figure'),
         dash.dependencies.Input({"type": "map-select", "name": MATCH}, "value"),
+        dash.dependencies.Input({"type": "trans-select", "name": MATCH}, "value"),
     )
-    def update_map(value):
-        name = dash.callback_context.args_grouping['id']['name']
+    def update_map(value, add_trans):
+        name = dash.callback_context.args_grouping[0]['id']['name']
         temp_model = model_cache.get(name, model)
-        return px.choropleth(
+        fig = px.choropleth(
             temp_model.RunModel.DF,
             geojson=GEO_JSON,
             locations='FIPS',
@@ -869,6 +896,13 @@ def setup_app(model):
             basemap_visible=False,
             center={"lat": 31.391489, "lon": -99.174304}
         )
+        if add_trans != 'None':
+            temp_cords = TRANS_CORDS
+            if add_trans != 'All':
+                temp_cords = temp_cords[(temp_cords.Voltage == add_trans) | temp_cords.Voltage.isna()]
+            temp_trans_data = px.scatter_geo(temp_cords, 'Lat', 'Lon', text='Voltage').update_traces(mode="lines", line_color="red").data
+            fig.add_traces(temp_trans_data)
+        return fig
 
 
     @app.callback(
@@ -923,11 +957,7 @@ def setup_app(model):
 
     app.run_server(debug=True, use_reloader=False)
 
-
-
 if __name__ == "__main__":
     model = Models()
     setup_app(model)
-    # model.RunModel.rebuild()
-    # self = model.RunModel.Models[0].SolarModel
-    #
+

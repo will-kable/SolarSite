@@ -1,8 +1,7 @@
 import pandas
-from geopy.geocoders import Nominatim
 import json
 from timezonefinder import TimezoneFinder
-
+import plotly.express as px
 
 
 COUNTIES = pandas.read_csv("Config/Texas_Counties_Centroid_Map.csv")
@@ -16,6 +15,10 @@ GEO_JSON = json.load(open('Config/geo_json.json'))
 PROP_TAXES = json.load(open('Config/property_tax.json'))
 
 API_KEY_NREL = 'me1DbZYqNf6JyoeT9XlnhQhHuzdjVsY4xbXzXzg0'
+
+TRANS_CORDS = pandas.read_csv("Config/transmission_cords_texas.csv", index_col=0)
+
+MAPBOX_TOKEN = "pk.eyJ1Ijoid2lsbGthYmxlIiwiYSI6ImNsdXl0NWdqNjBidjIyams3bHVsOWhlZGUifQ.fhRt22a1eXsYVRecPpiWyw"
 
 ARRAY_MAP = {
     'Fixed': 0,
