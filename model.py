@@ -154,38 +154,104 @@ class TechnologyModel(BaseModel):
     def render(self):
         return html.Div(
             [
-                html.P('Capacity (MW)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'Capacity'}, type='number', placeholder=self.Capacity),
-                html.P('DC Ratio'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'DCRatio'}, type='number', placeholder=self.DCRatio),
-                html.P('Azimuth'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'Azimuth'}, type='number', placeholder=self.Azimuth),
-                html.P('Inverter Efficiency'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'InvEff'}, type='number', placeholder=self.InvEff),
-                html.P('Losses (%)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'Losses'}, type='number', placeholder=self.Losses),
-                html.P('Array Type'),
-                html.Br(),
-                dcc.Dropdown(id={'type': 'param', 'name': 'ArrayType'},
-                             options=['Fixed', 'Fixed Roof', '1 Axis Tracker', '1 Axis Backtracked', '2 Axis Tracker'],
-                             placeholder=self.ArrayType),
-                html.P('Module Type'),
-                html.Br(),
-                dcc.Dropdown(id={'type': 'param', 'name': 'ModuleType'},
-                             options=['Standard', 'Premium', 'Thin Film'],
-                             placeholder=self.ModuleType),
-                html.P('GCR'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'GCR'}, type='number', placeholder=self.GCR),
-                html.P('Annual Degradation (%/year)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'DegredationRate'}, type='number', placeholder=self.DegradationRate),
-            ]
+                html.Div(
+                    [
+                        html.P('System Parameters',
+                               style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                        html.Div(
+                            [
+                                html.P('Capacity (MW)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'Capacity'}, type='number', value=self.Capacity,
+                                          style={'display': 'inline-block', 'width': '60%'}, step=10),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Module Type', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Dropdown(id={'type': 'param', 'name': 'ModuleType'},
+                                             options=['Standard', 'Premium', 'Thin Film'],
+                                             value=self.ModuleType, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('DC Ratio', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'DCRatio'}, type='number', value=self.DCRatio, step=0.1,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Inverter Efficiency (%)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'InvEff'}, type='number', value=self.InvEff, step=1,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                    ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top',
+                              'border-radius': '15px', 'background-color': 'beige', 'margin': '10px'}
+                ),
+                html.Div(
+                    [
+                        html.P('System Orientation',
+                               style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                        html.Div(
+                            [
+                                html.P('Array Type', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Dropdown(id={'type': 'param', 'name': 'ArrayType'},
+                                             options=['Fixed', 'Fixed Roof', '1 Axis Tracker', '1 Axis Backtracked',
+                                                      '2 Axis Tracker'],
+                                             value=self.ArrayType, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Azimuth', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'Azimuth'}, type='number', value=self.Azimuth, step=1,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Ground Coverage Ratio', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'GCR'}, type='number', value=self.GCR, step=0.1,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+
+                    ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top',
+                              'border-radius': '15px', 'background-color': 'beige', 'margin': '10px'}
+                ),
+                html.Div(
+                    [
+                        html.P('System Losses', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                        html.Div(
+                            [
+                                html.P('Total Losses (%)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'Losses'}, type='number', value=self.Losses, step=1,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Annual Degradation (%/year)',
+                                       style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'DegredationRate'}, type='number',
+                                          step=0.1, value=self.DegradationRate, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                    ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top',
+                              'border-radius': '15px', 'background-color': 'beige', 'margin': '10px'}
+                )
+            ], style={'background-color': 'whitesmoke'}
         )
 
 
@@ -202,21 +268,54 @@ class MarketModel(BaseModel):
     def render(self):
         return html.Div(
             [
-                html.Br(),
-                daq.ToggleSwitch(label='Include Cannibilization Adjustment', id={'type': 'param', 'name': 'IncludeCannib'}),
-                html.Br(),
-                daq.ToggleSwitch(label='Include Curtailment Adjustment', id={'type': 'param', 'name': 'IncludeCurtailment'}),
-                html.Br(),
-                daq.ToggleSwitch(label='Include REC Value', id={'type': 'param', 'name': 'IncludeRECs'}),
-                html.P('Federal PTC ($/MWh)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'FederalPTC'}, type='number', placeholder=self.FederalPTC),
-                html.P('State PTC ($/MWh)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'StatePTC'}, type='number', placeholder=self.StatePTC),
+                html.Div(
+                    [
+                        html.P('Revenue Adjustments', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                        html.Div(
+                            [
+                                daq.ToggleSwitch(label='Include Cannibalization Adjustment',
+                                                 value=self.IncludeCannib,
+                                                 id={'type': 'param', 'name': 'IncludeCannib'},
+                                                 style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'center', 'height': '7vh', 'margin': '10px'}
+                        ),
+                        html.Div(
+                            [
+                                daq.ToggleSwitch(label='Include Curtailment Adjustment',
+                                                 value=self.IncludeCurtailment,
+                                                 id={'type': 'param', 'name': 'IncludeCurtailment'},
+                                                 style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'center', 'height': '7vh', 'margin': '10px'}
+                        ),
+                        html.Div(
+                            [
+                                daq.ToggleSwitch(label='Include REC Value', id={'type': 'param', 'name': 'IncludeRECs'},
+                                                 value=self.IncludeRECs,
+                                                 style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'center', 'height': '7vh', 'margin': '10px'}
+                        ),
+                    ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top',
+                              'border-radius': '15px', 'background-color': 'beige', 'margin': '10px'}
+                ),
+                html.Div(
+                    [
+                        html.P('Production Incentives', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                        html.Div(
+                            [
+                                html.P('Federal Production Tax Credit ($/MWh)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'FederalPTC'}, type='number', value=self.FederalPTC, step=1, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('State Production Tax Credit ($/MWh)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'StatePTC'}, type='number', value=self.StatePTC, step=1, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                    ],  style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top', 'border-radius':'15px', 'background-color': 'beige', 'margin': '10px'}
+                ),
             ]
         )
-
 
 class CapitalCostModel(BaseModel):
     def __init__(self):
@@ -243,55 +342,109 @@ class CapitalCostModel(BaseModel):
     def render(self):
         return html.Div(
             [
-                html.P('ModuleCost ($/Wdc)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'ModuleCost'}, type='number', placeholder=self.ModuleCost),
-                html.P('Inverter Cost ($/Wdc)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'InverterCost'}, type='number', placeholder=self.InverterCost),
-                html.P('Equipment Cost ($/Wdc)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'EquipmentCost'}, type='number', placeholder=self.EquipmentCost),
-                html.P('Labor Cost ($/Wdc)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'LaborCost'}, type='number', placeholder=self.LaborCost),
-                html.P('Overhead Cost ($/Wdc)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'OverheadCost'}, type='number', placeholder=self.OverheadCost),
-                html.P('Contingency Cost ($/Wdc)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'ContingencyCost'}, type='number', placeholder=self.ContingencyCost),
-                html.P('Permitting Cost ($/Wdc)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'PermittingCost'}, type='number', placeholder=self.PermittingCost),
-                html.P('Grid Connection Cost ($/Wdc)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'GridConnectionCost'}, type='number', placeholder=self.GridConnectionCost),
-                html.P('Engineering Cost ($/Wdc)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'EngineeringCost'}, type='number', placeholder=self.EngineeringCost),
+                html.Div(
+                    [
+                        html.P('Direct Costs', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                        html.Div(
+                            [
+                                html.P('Module Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'ModuleCost'}, type='number', value=self.ModuleCost, step=0.01, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Inverter Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'InverterCost'}, type='number', value=self.InverterCost, step=0.01, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Equipment Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'EquipmentCost'}, type='number', value=self.EquipmentCost, step=0.01, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Labor Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'LaborCost'}, type='number', value=self.LaborCost, step=0.01, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Overhead Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'OverheadCost'}, type='number', value=self.OverheadCost, step=0.01, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Contingency Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'ContingencyCost'}, type='number', value=self.ContingencyCost, step=0.01, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                    ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top', 'border-radius':'15px', 'background-color': 'beige', 'margin': '10px'}
+                ),
+                html.Div(
+                    [
+                        html.P('Indirect Costs', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                        html.Div(
+                            [
+                                html.P('Permitting Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'PermittingCost'}, type='number', value=self.PermittingCost, step=0.01, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Grid Connection Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'GridConnectionCost'}, type='number', value=self.GridConnectionCost, step=0.01, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Engineering Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'EngineeringCost'}, type='number', value=self.EngineeringCost, step=0.01, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                    ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top', 'border-radius':'15px', 'background-color': 'beige', 'margin': '10px'}
+                ),
             ]
         )
-
 
 class OperatingCostModel(BaseModel):
     def __init__(self):
         super().__init__()
-        self.AnnualCost = 0.01
+        self.AnnualCost = 0
         self.AnnualCostByCapacity = 15
+        self.VariableCostGen = 0
         self.S2 = datetime.datetime.now()
 
     def render(self):
         return html.Div(
+    [
+        html.Div(
             [
-                html.P('Annual Fixed Cost ($/yr)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'AnnualCost'}, type='number', placeholder=self.AnnualCost),
-                html.P('Annual Fixed Cost by Capacity ($/(kw-yr))'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'AnnualCostByCapacity'}, type='number', placeholder=self.AnnualCostByCapacity),
-            ]
-        )
+                html.P('Operation and Maintenance Costs', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                html.Div(
+                    [
+                        html.P('Annual Fixed Cost ($/yr)', style={'display': 'inline-block', 'width': '35%'}),
+                        dcc.Input(id={'type': 'param', 'name': 'AnnualCost'}, type='number', value=self.AnnualCost, step=1e6, style={'display': 'inline-block', 'width': '60%'}),
+                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                ),
+                html.Div(
+                    [
+                        html.P('Annual Fixed Cost by Capacity ($/(kw-yr))', style={'display': 'inline-block', 'width': '35%'}),
+                        dcc.Input(id={'type': 'param', 'name': 'AnnualCostByCapacity'}, type='number', value=self.AnnualCostByCapacity, step=1, style={'display': 'inline-block', 'width': '60%'}),
+                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                ),
+                html.Div(
+                    [
+                        html.P('Equipment Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                        dcc.Input(id={'type': 'param', 'name': 'VariableCostGen'}, type='number', value=self.VariableCostGen, step=1, style={'display': 'inline-block', 'width': '60%'}),
+                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                ),
+                ], style={'width': '60%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top', 'border-radius':'15px', 'background-color': 'beige', 'margin': '10px'}
+            ),
+    ]
+)
 
 
 class FinanceModel(BaseModel):
@@ -300,6 +453,7 @@ class FinanceModel(BaseModel):
         self.Term = 25
         self.StartYear = datetime.date.today().year + 1
         self.InflationRate = 2.5
+        self.DiscountRate = 6.4
         self.FederalTaxRate = 21
         self.StateTaxRate = 7
         self.SalesTaxRate = 6.25
@@ -320,26 +474,64 @@ class FinanceModel(BaseModel):
     def render(self):
         return html.Div(
             [
-                html.P('Start Yera'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'StartYear'}, type='number', placeholder=self.StartYear),
-                # dcc.DatePickerSingle(id={'type': 'dates', 'name': 'Date'}, date=self.Date),
-                html.P('Analysis Period (years)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'Term'}, type='number', placeholder=self.Term),
-                html.P('Inflation Rate (%)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'InflationRate'}, type='number', placeholder=self.Term),
-                html.P('Federal Tax Rate (%)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'FederalTaxRate'}, type='number', placeholder=self.FederalTaxRate),
-                html.P('State Tax Rate (%)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'StateTaxRate'}, type='number', placeholder=self.StateTaxRate),
-                html.P('Sales Tax Rate (%)'),
-                html.Br(),
-                dcc.Input(id={'type': 'param', 'name': 'SalesTaxRate'}, type='number',placeholder=self.SalesTaxRate),
-
+                html.Div(
+                    [
+                        html.P('Analysis Parameters', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                        html.Div(
+                            [
+                                html.P('Start Year', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'StartYear'}, type='number', value=self.StartYear, step=1, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Analysis Period (years)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'Term'}, type='number', value=self.Term, step=1, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Infaltion Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'InfaltionRate'}, type='number', value=self.InflationRate, step=0.1,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Discount Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'DiscountRate'}, type='number',
+                                          value=self.DiscountRate, step=0.1,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                    ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top', 'border-radius':'15px', 'background-color': 'beige', 'margin': '10px'}
+                ),
+                html.Div(
+                    [
+                        html.P('Tax Parameters', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
+                        html.Div(
+                            [
+                                html.P('Federal Tax Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'FederalTaxRate'}, type='number', value=self.FederalTaxRate, step=1, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('State Tax Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'StateTaxRate'}, type='number', value=self.StateTaxRate,
+                                          step=1, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('State Sales Tax Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'SalesTaxRate'}, type='number', value=self.SalesTaxRate,
+                                          step=1, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
+                        ),
+                    ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top',
+                              'border-radius': '15px', 'background-color': 'beige', 'margin': '10px'}
+                ),
             ]
         )
 
@@ -776,10 +968,10 @@ def setup_app(model):
     tables = ['Technology', 'CapitalCost', 'OperatingCost', 'Market', 'Finance', 'Run']
     model_cache = {}
     app.layout = html.Div([
-        html.P(id='banner_text', children='Configure Model Parameters'),
-        dcc.Tabs(id='tabs', value='Technology', children=[dcc.Tab(label=i, value=i, children=getattr(model, f'{i}Model').render()) for i in tables]),
-        html.Div(id='tabs-content',  style={"height": "100vh"}),
-    ], style={'height': '100vh', 'padding': 10})
+        html.P(id='banner_text', children='Configure Model Parameters', style={'background-color': 'whitesmoke'}),
+        dcc.Tabs(id='tabs', value='Technology', children=[dcc.Tab(label=i, value=i, children=getattr(model, f'{i}Model').render(), style={'background-color': 'whitesmoke'}) for i in tables]),
+        html.Div(id='tabs-content',  style={"height": "100vh", 'background-color': 'whitesmoke'}),
+    ], style={'height': '100vh', 'padding': 10, 'background-color': 'whitesmoke'})
 
     @app.callback(
         dash.dependencies.Output('banner_text', 'children'),
