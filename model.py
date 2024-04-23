@@ -1,31 +1,24 @@
 import datetime
-import io
-import json
 import os
+from copy import deepcopy
 
-import PySAM.PySSC as pssc
-import PySAM.Pvwattsv8 as PVW
 import PySAM.Merchantplant as MERC
-import PySAM.Grid as GRID
-import itertools
+import PySAM.Pvwattsv8 as PVW
 import PySAM.ResourceTools as RT
-from sklearn.linear_model import LinearRegression
+import dash
+import dash_bootstrap_components as dbc
+import dash_daq as daq
+import geopy.distance
 import matplotlib.pyplot as plt
 import numpy
-import pandas
 import requests
-import dash
-import plotly.express as px
-from dash import Dash, dcc, html, callback, ALL, MATCH, Input, State, Output, Patch, no_update
-import dash_bootstrap_components as dbc
+from dash import Dash, dcc, html, ALL, MATCH, no_update
+from dash.dash_table.Format import Format
+from dateutil import relativedelta
+from multiprocessing import Pool
+
 from common import closest_key, timeshape
 from config import *
-import dash_daq as daq
-from dateutil import relativedelta
-from flask_caching import Cache
-from copy import deepcopy
-from multiprocessing import Pool
-import geopy.distance
 
 timeout = 60
 
@@ -266,7 +259,7 @@ class RevenueModel(BaseModel):
     def __init__(self):
         super().__init__()
         self.IncludeCannib = True
-        self.IncludeCurtailment = True
+        self.IncludeCurtailment = False
         self.IncludeRECs = True
         self.FederalPTC = 0.0275
         self.StatePTC = 0
@@ -776,6 +769,7 @@ class WeatherModel(BaseModel):
             API_KEY_NREL,
             'will.kable@axpo.com',
             resource_dir='data\\Weather',
+            resource_type='psm3-2-2-tmy',
             workers=512,
             verbose=False,
         )
@@ -820,12 +814,12 @@ class SolarModel(BaseModel):
         return angle
 
     def total_installed_cost(self):
-        direct = self.CapitalCostModel.direct_cost(self.TechnologyModel.Capacity)
-        trans = self.LocationModel.get_dict['100_161_kV'] * self.CapitalCostModel.TransmissionCost
-        indirect = self.CapitalCostModel.indirect_cost(self.TechnologyModel.Capacity) + trans
-        land = self.LocationModel.land_cost(self.TechnologyModel.LandArea)
-        sales = self.FinanceModel.SalesTaxRate / 100 * (direct)
-        return direct + indirect + land + sales
+        self.DirectCost = self.CapitalCostModel.direct_cost(self.TechnologyModel.Capacity)
+        self.TransmissionCost = self.LocationModel.get_dict['100_161_kV'] * self.CapitalCostModel.TransmissionCost
+        self.IndirectCosts = self.CapitalCostModel.indirect_cost(self.TechnologyModel.Capacity) + self.TransmissionCost
+        self.LandCost = self.LocationModel.land_cost(self.TechnologyModel.LandArea)
+        self.SalesTax = self.FinanceModel.SalesTaxRate / 100 * (self.DirectCost)
+        return self.DirectCost + self.IndirectCosts + self.LandCost + self.SalesTax
 
     def total_construction_financing_cost(self):
         princ = self.total_installed_cost()
@@ -970,7 +964,7 @@ class SolarModel(BaseModel):
         self.LCOENom = out_merc['lcoe_nom'] * 10
         self.NPV = out_merc["project_return_aftertax_npv"]
         self.IRR = out_merc["analysis_period_irr"]
-        self.CapacityFactor = sum(out_solar['gen']) / (8760 * self.TechnologyModel.Capacity * 1000)
+        self.CapacityFactor = sum(out_solar['gen']) / (8760 * self.TechnologyModel.Capacity * 1000) * 100
 
         self.RevenueTable = pandas.DataFrame({
             'Energy Revenue ($)': energy_revenue,
@@ -1016,14 +1010,14 @@ class SolarModel(BaseModel):
             'Total After-tax NPV ($)': out_merc['cf_project_return_aftertax_npv'],
             'Depreciation': [],
             'Total Tax Deprecation - MARC 5 year': out_merc['cf_feddepr_macrs_5']
-        }).apply(pandas.Series).set_axis(self.PeriodModel.CashFlowYears, axis=1)
+        }).apply(pandas.Series).round(2).set_axis(self.PeriodModel.CashFlowYears, axis=1).T
 
         self.SummaryTable = pandas.Series({
             'Energy Production (MWh)': sum(out_merc['cf_energy_net']) / 1000,
             'Capacity Factor (%)': self.CapacityFactor,
-            'Energy Revenue ($)': sum(energy_revenue),
-            'REC Revenue ($)': sum(rec_revenue),
-            'Cannibalization Adjustment ($)': sum(cannib_revenue),
+            'Energy Revenue ($)': sum(energy_revenue.fillna(0)),
+            'REC Revenue ($)': sum(rec_revenue.fillna(0)),
+            'Cannibalization Adjustment ($)': sum(cannib_revenue.fillna(0)),
             'Total Revenue': sum(total_revenue),
             'Solar Capture Rate (%)': ((gen['MW'] * energy_prices).sum() / gen['MW'].sum()) / energy_prices.mean() * 100,
             'PPA Price ($/MWh)': sum(total_revenue) / (sum(out_merc['cf_energy_net']) / 1000),
@@ -1036,6 +1030,10 @@ class SolarModel(BaseModel):
             'Size of Equity ($)': out_merc['size_of_equity'],
             'Size of Debt ($)': out_merc['size_of_debt'],
             'Land Area (Acres)': self.TechnologyModel.LandArea,
+            'Direct Capital Cost ($)': self.DirectCost,
+            'Transmission Cost ($)': self.TransmissionCost,
+            'Land Purchase Cost ($)': self.LandCost,
+            'Indirect Capital Cost ($)': self.IndirectCosts,
         }).round(2).reset_index().set_axis(['Metric', 'Value'], axis=1)
 
         return gen
@@ -1207,12 +1205,9 @@ class Model(BaseModel):
 class Models(BaseModel):
     def __init__(self):
         super().__init__()
-        self.Term = 5
-        self.StartDate = datetime.datetime.now()
-        self.End = datetime.date.today() + datetime.timedelta(days=365)
         self.Lats = COUNTIES['X (Lat)'].tolist()
         self.Longs = COUNTIES['Y (Long)'].tolist()
-        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:1]
+        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:5]
         self.Zones = set([i.Zone for i in self.Locations])
         self.TimeZones = set([i.TimeZone for i in self.Locations])
         self.TechnologyModel = TechnologyModel()
@@ -1261,12 +1256,21 @@ class RunModel(BaseModel):
         #     self.Models = pool.map(self.build_mode, self.Locations)
         self.Models = [self.build_mode(i) for i in self.Locations]
         self.DF = self.build_dataframe()
+        self.optimal_county()
 
     def build_dataframe(self):
         cols = ['Name', 'FIPS', 'Lat', 'Long', 'Zone', 'LandPrice', 'PropertyTax', 'FairValue', 'AverageDNI',
                 'AverageDHI', 'AverageMW', 'LCOEReal', 'LCOENom', 'NPV', 'IRR', '100_161_kV', '220_287_kV', '345_kV',
                 '500_kV']
         return pandas.DataFrame({col: [getattr(i, col) for i in self.Models] for col in cols}).round(2)
+
+    def optimal_county(self, metric='NPV'):
+        self.OptimalCountyModel = self.Models[pandas.Series([getattr(i, metric) for i in self.Models]).idxmax()]
+        self.OptimalCountyName = self.OptimalCountyModel.Name
+        self.OptimalCountySummary = self.OptimalCountyModel.SummaryTable.loc[[0, 1, 6, 7, 8, 9, 10, 11]]
+        tab_data = self.OptimalCountySummary.round(2).to_dict('records')
+        tab_cols = [{"name": str(i), "id": str(i), 'type': 'numeric', 'format': Format(group=',')} for i in self.OptimalCountySummary.columns]
+        return tab_data, tab_cols
 
     def render(self):
         return html.Div([html.Button('Run', id='run'), dcc.Input(id='model_name', value='Model1', type="text")])
@@ -1319,6 +1323,7 @@ def setup_app(model):
             model.RunModel.RunTacker = value
             model.RunModel.rebuild()
             model_cache[model_name] = deepcopy(model)
+            opt_tab, opt_col = model.RunModel.optimal_county()
             new_tab = dcc.Tab(
                 label=model_name,
                 value=model_name,
@@ -1330,14 +1335,14 @@ def setup_app(model):
                                     [
                                         html.Div(
                                             dcc.Dropdown(model.RunModel.DF.columns, 'Zone', id={'type': 'map-select', 'name': model_name}),
-                                            style={'width': '60%', 'display': 'inline-block'}
+                                            style={'width': '60%', 'display': 'inline-block', 'height': '4vh', 'border': '2px black solid'}
                                         ),
                                         html.Div(
                                             dcc.Dropdown(['None', 'All', '100-161', '220-287', '345', '500'], 'None', id={'type': 'trans-select', 'name': model_name}),
-                                            style={'width': '25%', 'display': 'inline-block'}
+                                            style={'width': '25%', 'display': 'inline-block', 'height': '4vh', 'border': '2px black solid'}
                                         ),
                                     ],
-                                    style={'display': 'flex', 'justify-content': 'space-between', 'height': '5vh'}
+                                    style={'display': 'flex', 'justify-content': 'space-between', 'height': '4vh'}
 
                                 ),
                                 dcc.Graph(
@@ -1355,15 +1360,31 @@ def setup_app(model):
                                         basemap_visible=False,
                                         center={"lat": 31.391489, "lon": -99.174304}
                                     ),
-                                    style={'height': '60vh'}
+                                    style={'height': '65vh', 'vertical-align': 'bottom'}
                                 )
-                            ], style={'width': '80%', 'display': 'inline-block', 'vertical-align': 'top', 'border': '2px black solid', 'padding-bottom': '10vh'}),
+                            ], style={'width': '75%', 'display': 'inline-block', 'vertical-align': 'top', 'height': '70vh'}),
                             html.Div(
-                                dash.dash_table.DataTable(
-                                    id={'type': 'summary_data_table', 'name': model_name},
-                                    export_format='csv',
-                                    style_table={'overflowX': 'scroll'},
-                                ), style={'height': '65vh', 'width': '20%', 'display': 'inline-block', 'vertical-align': 'top'}
+                                [
+                                    html.P(f'Optimal County: {model.RunModel.OptimalCountyName}',
+                                           style={'text-align': 'center', 'width': '100%', "font-weight": "bold", 'height': '4vh', 'border': '2px black solid', 'align': 'center'}
+                                           ),
+                                    dash.dash_table.DataTable(
+                                        data=opt_tab,
+                                        columns=opt_col,
+                                        id={'type': 'recommend_data_table', 'name': model_name},
+                                        style_cell={'width': '50%'},
+                                        style_table={'height': '20vh'},
+                                    ),
+                                    html.P(f'County: ',
+                                           id={'type': 'summary_data_table_label', 'name': model_name},
+                                           style={'text-align': 'center', 'width': '100%', "font-weight": "bold", 'height': '4vh', 'border': '2px black solid', 'align': 'center'}
+                                           ),
+                                    dash.dash_table.DataTable(
+                                        id={'type': 'summary_data_table', 'name': model_name},
+                                        style_cell={'width': '50%'},
+                                        style_table={'overflowY': 'scroll', 'height': '38.5vh'},
+                                    )
+                                ], style={'width': '25%', 'display': 'inline-block', 'height': '70vh'}
                             ),
                         html.Div(
                             [
@@ -1372,9 +1393,14 @@ def setup_app(model):
                                             value='Summary',
                                             children=html.Div([
                                                 dcc.Graph(
-                                                    id={'type': 'x-graph', 'name': model_name},
-                                                    style={'height': '65vh', 'width': '50%', 'display': 'inline-block'}
-                                                )])
+                                                    id={'type': 'hourly-x-graph', 'name': model_name},
+                                                    style={'height': '65vh', 'width': '50%', 'display': 'inline-block', 'border': '2px black solid'}
+                                                ),
+                                                dcc.Graph(
+                                                    id={'type': 'monthly-x-graph', 'name': model_name},
+                                                    style={'height': '65vh', 'width': '50%', 'display': 'inline-block', 'border': '2px black solid'}
+                                                )
+                                            ])
                                             ),
                                     dcc.Tab(label='Cashflows',
                                             value='Cashflows',
@@ -1391,37 +1417,6 @@ def setup_app(model):
                     ]
                 )
             )
-            #             html.Div(
-            #                 [
-            #                     dcc.Tabs(id='sumamry-tabs', value='Summary', children=[
-            #                         dcc.Tab(label='Summary',
-            #                                 value='Summary',
-            #                                 children=html.Div([
-            #                                     html.Div(dash.dash_table.DataTable(
-            #                                         id={'type': 'summary_data_table', 'name': model_name},
-            #                                         export_format='csv',
-            #                                         style_table={'overflowX': 'scroll'}),
-            #                                         style={'height': '65vh', 'width': '50%', 'display': 'inline-block'}
-            #                                     ),
-            #                                     dcc.Graph(
-            #                                         id={'type': 'x-graph', 'name': model_name},
-            #                                         style={'height': '65vh', 'width': '50%', 'display': 'inline-block', 'border': '2px black solid', 'vertical-align': 'top'}
-            #                                     ),
-            #                                 ], style={'width': '100%', 'display': 'inline-block'})),
-            #                         dcc.Tab(label='Cashflows',
-            #                                 value='Cashflows',
-            #                                 children=html.Div(dash.dash_table.DataTable(
-            #                                     id={'type': 'data_table', 'name': model_name},
-            #                                     export_format='csv',
-            #                                     style_table={'overflowX': 'scroll'}),
-            #                                     style={'background-color': 'whitesmoke', 'height': '65vh'}
-            #                                 ))]),
-            #                     html.Button('Delete Tab', id={'type': 'delete', 'name': model_name})
-            #                 ]
-            #             )
-            #         ]
-            #     )
-            # )
             model.RunModel.reset()
             return children + [new_tab]
         return no_update
@@ -1457,11 +1452,13 @@ def setup_app(model):
         return fig
 
     @app.callback(
+        dash.dependencies.Output({"type": 'summary_data_table_label', "name": MATCH}, 'children'),
         dash.dependencies.Output({"type": 'summary_data_table', "name": MATCH}, 'data'),
         dash.dependencies.Output({"type": 'summary_data_table', "name": MATCH}, 'columns'),
         dash.dependencies.Output({"type": 'data_table', "name": MATCH}, 'data'),
         dash.dependencies.Output({"type": 'data_table', "name": MATCH}, 'columns'),
-        dash.dependencies.Output({"type": 'x-graph', "name": MATCH}, 'figure'),
+        dash.dependencies.Output({"type": 'hourly-x-graph', "name": MATCH}, 'figure'),
+        dash.dependencies.Output({"type": 'monthly-x-graph', "name": MATCH}, 'figure'),
         dash.dependencies.Input({"type": "map", "name": MATCH}, "clickData"),
     )
     def update_county_profile(clickData):
@@ -1472,31 +1469,40 @@ def setup_app(model):
         temp_model = model_cache.get(name, model)
         county = clickData['points'][0]['customdata'][0]
         county_model = [i for i in temp_model.RunModel.Models if i.Name == county][0]
-        graph = county_model.HourlyProfile.T
-
+        county_label = f'County: {county_model.Name}'
+        hourly_graph = county_model.HourlyProfile.T
+        monthly_graph = county_model.MonthlyProfile.T
         # Update the Graph
-        plt_dct = {
-            'data': [{'x': graph.index, 'y': graph[i], 'type': 'line', 'name': i} for i in graph.columns],
+        hourly_plt_dct = {
+            'data': [{'x': hourly_graph.index, 'y': hourly_graph[i], 'type': 'line', 'name': i} for i in hourly_graph.columns],
             'layout': {
                 'title': {'text': f'{county} Hourly Generation Profile'},
-                'xaxis': {'title': 'Hourending'},
-                'yaxis': {'range': [0, graph.max(axis=1).max() * 1.1], 'title': 'Avg Generation (MWh)'}
+                'xaxis': {'title': 'Hourending', 'dtick': 1},
+                'yaxis': {'range': [0, hourly_graph.max(axis=1).max() * 1.1], 'title': 'Avg Hourly Generation (MWh)'}
             }
 
         }
-        # patched_figure['data'] = [{'x': graph.index, 'y': graph[i], 'type': 'line', 'name': i} for i in graph.columns]
-        # patched_figure['layout']['yaxis'].update({'range': [0, graph.max(axis=1).max() * 1.1]})
+
+        monthly_plt_dct = {
+            'data': [{'x': monthly_graph.index, 'y': monthly_graph.tolist(), 'type': 'line', 'name': 'MW'}],
+            'layout': {
+                'title': {'text': f'{county} Monthly Generation Profile'},
+                'xaxis': {'title': 'Month', 'range': [1, 12], 'dtick': 1},
+                'yaxis': {'range': [monthly_graph.min() * 0.9, monthly_graph.max() * 1.1], 'title': 'Avg Monthly Generation (MWh)'}
+            }
+
+        }
 
         # Update the DataTable
         data = county_model.CashFlowTable.T.reset_index()
         tab_data = data.round(2).to_dict('records')
-        tab_cols = [{"name": str(i), "id": str(i)} for i in data.columns]
+        tab_cols = [{"name": str(i), "id": str(i), 'type': 'numeric', 'format': Format(group=',')} for i in data.columns]
 
         sum_data = county_model.SummaryTable
         sum_tab_data = sum_data.round(2).to_dict('records')
-        sum_tab_cols = [{"name": str(i), "id": str(i)} for i in sum_data.columns]
+        sum_tab_cols = [{"name": str(i), "id": str(i), 'type': 'numeric', 'format': Format(group=',')} for i in sum_data.columns]
 
-        return sum_tab_data, sum_tab_cols, tab_data, tab_cols, plt_dct
+        return county_label, sum_tab_data, sum_tab_cols, tab_data, tab_cols, hourly_plt_dct, monthly_plt_dct
 
     @app.callback(
         dash.dependencies.Output('tabs', 'children', allow_duplicate=True),
@@ -1518,6 +1524,6 @@ def setup_app(model):
 
 if __name__ == "__main__":
     model = Models()
-    model.RunModel.rebuild()
-    self = model.RunModel.Models[0].SolarModel
-    # setup_app(model)
+    # model.RunModel.rebuild()
+    # self = model.RunModel.Models[0].SolarModel
+    setup_app(model)
