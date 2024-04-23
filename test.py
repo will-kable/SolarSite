@@ -1,71 +1,26 @@
 from dash import Dash, dcc, html
+import dash
 import dash_bootstrap_components as dbc
 import dash_daq as daq
 
+model_name = 'test'
 app = Dash(__name__, external_stylesheets=[dbc.themes.MINTY])
-app.layout = html.Div(
-    [
-        html.Div(
-            [
-                html.P('Analysis Parameters', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
-                html.Div(
-                    [
-                        html.P('Start Year', style={'display': 'inline-block', 'width': '35%'}),
-                        dcc.Input(id={'type': 'param', 'name': 'StartYear'}, type='number', value=self.StartYear, step=1, style={'display': 'inline-block', 'width': '60%'}),
-                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
-                ),
-                html.Div(
-                    [
-                        html.P('Analysis Period (years)', style={'display': 'inline-block', 'width': '35%'}),
-                        dcc.Input(id={'type': 'param', 'name': 'Term'}, type='number', value=self.Term, step=1, style={'display': 'inline-block', 'width': '60%'}),
-                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
-                ),
-                html.Div(
-                    [
-                        html.P('Infaltion Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
-                        dcc.Input(id={'type': 'param', 'name': 'InfaltionRate'}, type='number', value=self.InfaltionRate, step=0.1,
-                                  style={'display': 'inline-block', 'width': '60%'}),
-                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
-                ),
-                html.Div(
-                    [
-                        html.P('Discount Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
-                        dcc.Input(id={'type': 'param', 'name': 'DiscountRate'}, type='number',
-                                  value=self.DiscountRate, step=0.1,
-                                  style={'display': 'inline-block', 'width': '60%'}),
-                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
-                ),
-                ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top', 'border-radius':'15px', 'background-color': 'beige', 'margin': '10px'}
-            ),
-        html.Div(
-            [
-                html.P('Tax Parameters', style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
-                html.Div(
-                    [
-                        html.P('Federal Tax Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
-                        dcc.Input(id={'type': 'param', 'name': 'FederalTaxRate'}, type='number', value=self.FederalTaxRate, step=1, style={'display': 'inline-block', 'width': '60%'}),
-                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
-                ),
-                html.Div(
-                    [
-                        html.P('State Tax Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
-                        dcc.Input(id={'type': 'param', 'name': 'StateTaxRate'}, type='number', value=self.StateTaxRate,
-                                  step=1, style={'display': 'inline-block', 'width': '60%'}),
-                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
-                ),
-                html.Div(
-                    [
-                        html.P('State Sales Tax Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
-                        dcc.Input(id={'type': 'param', 'name': 'SalesTaxRate'}, type='number', value=self.SalesTaxRate,
-                                  step=1, style={'display': 'inline-block', 'width': '60%'}),
-                    ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh', 'margin': '5px'}
-                ),
-            ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top',
-                      'border-radius': '15px', 'background-color': 'beige', 'margin': '10px'}
-        ),
-    ]
-)
-
-
-
+app.layout =                         html.Div(
+                            [
+                                dcc.Tabs(id='sumamry-tabs', value='Summary', children=[
+                                    dcc.Tab(label='Summary',
+                                            value='Summary',
+                                            children=html.Div([
+                                                html.Div(dash.dash_table.DataTable(id={'type': 'summary_data_table', 'name': model_name}, export_format='csv', style_table={'overflowX': 'scroll'}), style={'height': '65vh', 'width': '50%', 'display': 'inline-block'}),
+                                                dcc.Graph(id={'type': 'x-graph', 'name': model_name}, style={'height': '65vh', 'width': '50%', 'display': 'inline-block'}),
+                                                ], style={'width': '100%', 'display': 'inline-block', 'border': '2px black solid'}
+                                            )
+                                            ),
+                                    dcc.Tab(label='Cashflows',
+                                            value='Cashflows',
+                                            children=html.Div(dash.dash_table.DataTable(id={'type': 'data_table', 'name': model_name}, export_format='csv', style_table={'overflowX': 'scroll'}), style={'background-color': 'whitesmoke', 'height': '65vh'})
+                                            )]),
+                                html.Button('Delete Tab', id={'type': 'delete', 'name': model_name})
+                            ]
+                        )
 app.run_server(debug=False)
