@@ -4,7 +4,7 @@ from timezonefinder import TimezoneFinder
 import plotly.express as px
 
 
-COUNTIES = pandas.read_csv("Config/Texas_Counties_Centroid_Map.csv")
+COUNTIES = pandas.read_csv("Config/Texas_Counties_Centroid_Map.csv").dropna()
 
 LAND_PRICES = json.load(open('Config/land_prices.json'))
 

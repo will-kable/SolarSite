@@ -11,6 +11,7 @@ import dash_daq as daq
 import geopy.distance
 import matplotlib.pyplot as plt
 import numpy
+import pandas
 import requests
 from dash import Dash, dcc, html, ALL, MATCH, no_update
 from dash.dash_table.Format import Format
@@ -58,7 +59,7 @@ class LocationModel(BaseModel):
         self.Name = self.Info['CNTY_NM']
         self.FIPS = self.Info['FIPS']
         self.TimeZone = FINDER.timezone_at(lng=self.Long, lat=self.Lat)
-        self.Zone = closest_key(ZONAL_MAP, (lat, long))
+        self.Zone = self.Info['ZONE'] # closest_key(ZONAL_MAP, (lat, long))
         self.LandPrice = LAND_PRICES[self.Name]['Data']['2023']
         self.PropertyTax = PROP_TAXES[self.Name]
         self.LandRegion = LAND_PRICES[self.Name]['Region']
@@ -125,14 +126,14 @@ class TechnologyModel(BaseModel):
     def __init__(self):
         super().__init__()
         self.Capacity = 100
-        self.DCRatio = 1.3
+        self.DCRatio = 1.28
         self.Azimuth = 180
         self.InvEff = 96
         self.Losses = 14.07
-        self.ArrayType = 'Fixed'
+        self.ArrayType = '1 Axis Tracker'
         self.GCR = 0.3
         self.DegradationRate = 0.5
-        self.ModuleType = 'Standard'
+        self.ModuleType = 'Premium'
         self.S2 = datetime.datetime.now()
 
     def __repr__(self):
@@ -141,6 +142,10 @@ class TechnologyModel(BaseModel):
     @property
     def ModuleEfficiency(self):
         return MODULE_EFF[self.ModuleType]
+
+    @property
+    def CapacityAC(self):
+        return self.Capacity / self.DCRatio
 
     @property
     def LandArea(self):
@@ -262,7 +267,9 @@ class RevenueModel(BaseModel):
         self.IncludeCurtailment = False
         self.IncludeRECs = True
         self.FederalPTC = 0.0275
+        self.FederalPTCTerm = 10
         self.StatePTC = 0
+        self.StatePTCTerm = 0
         self.S2 = datetime.datetime.now()
 
     def render(self):
@@ -314,9 +321,28 @@ class RevenueModel(BaseModel):
                         ),
                         html.Div(
                             [
+                                html.P('Federal Production Tax Credit Term (Years)',
+                                       style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'FederalPTCTerm'}, type='number',
+                                          value=self.FederalPTCTerm, step=1,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
                                 html.P('State Production Tax Credit ($/MWh)',
                                        style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'StatePTC'}, type='number', value=self.StatePTC,
+                                          step=1, style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('State Production Tax Credit Term (Years)',
+                                       style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'StatePTCTerm'}, type='number', value=self.StatePTCTerm,
                                           step=1, style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
@@ -331,16 +357,19 @@ class RevenueModel(BaseModel):
 class CapitalCostModel(BaseModel):
     def __init__(self):
         super().__init__()
+        # https://atb.nrel.gov/electricity/2023/utility-scale_pv#tech-innovations-table-upv
         self.ModuleCost = 0.33
-        self.InverterCost = 0.05
+        self.InverterCost = 0.04
         self.EquipmentCost = 0.18
-        self.LaborCost = 0.10
+        self.LaborCost = 0.1
         self.OverheadCost = 0.05
         self.ContingencyCost = 0.03
         self.PermittingCost = 0
         self.GridConnectionCost = 0.03
         self.EngineeringCost = 0.08
+        # https://www.nrel.gov/docs/fy22osti/83586.pdf
         self.TransmissionCost = 600734
+
         self.S2 = datetime.datetime.now()
 
     def direct_cost(self, capacity):
@@ -449,7 +478,7 @@ class CapitalCostModel(BaseModel):
                         ),
                         html.Div(
                             [
-                                html.P('Engineering Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
+                                html.P('Engineering Overhead Cost ($/Wdc)', style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'EngineeringCost'}, type='number',
                                           value=self.EngineeringCost, step=0.01,
                                           style={'display': 'inline-block', 'width': '60%'}),
@@ -467,7 +496,7 @@ class OperatingCostModel(BaseModel):
     def __init__(self):
         super().__init__()
         self.AnnualCost = 0
-        self.AnnualCostByCapacity = 15
+        self.AnnualCostByCapacity = 23
         self.VariableCostGen = 0
         self.S2 = datetime.datetime.now()
 
@@ -489,7 +518,7 @@ class OperatingCostModel(BaseModel):
                         ),
                         html.Div(
                             [
-                                html.P('Annual Fixed Cost by Capacity ($/(kw-yr))',
+                                html.P('Annual Fixed Cost by Capacity ($/(kWac-yr))',
                                        style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'AnnualCostByCapacity'}, type='number',
                                           value=self.AnnualCostByCapacity, step=1,
@@ -521,7 +550,8 @@ class FinanceModel(BaseModel):
         self.StartYear = datetime.date.today().year + 1
         self.InflationRate = 2.5
         self.DiscountRate = 6.4
-        self.DebtFraction = 40
+        # https://www.nrel.gov/docs/fy22osti/80694.pdf
+        self.DebtFraction = 71.8
         self.DebtUpfrontFee = 2.75
         self.DebtInterestRate = 7
         self.DebtTenor = 18
@@ -707,7 +737,7 @@ class FinanceModel(BaseModel):
                 ),
                 html.Div(
                     [
-                        html.P('Equipment Replacement',
+                        html.P('Cash Reserves',
                                style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
                         html.Div(
                             [
@@ -819,7 +849,9 @@ class SolarModel(BaseModel):
         self.IndirectCosts = self.CapitalCostModel.indirect_cost(self.TechnologyModel.Capacity) + self.TransmissionCost
         self.LandCost = self.LocationModel.land_cost(self.TechnologyModel.LandArea)
         self.SalesTax = self.FinanceModel.SalesTaxRate / 100 * (self.DirectCost)
-        return self.DirectCost + self.IndirectCosts + self.LandCost + self.SalesTax
+        self.TotalInstalledCost = self.DirectCost + self.IndirectCosts + self.LandCost + self.SalesTax
+        self.TotalInstalledCostPerCapacity = self.TotalInstalledCost / (self.TechnologyModel.Capacity * 1E6)
+        return self.TotalInstalledCost
 
     def total_construction_financing_cost(self):
         princ = self.total_installed_cost()
@@ -845,7 +877,7 @@ class SolarModel(BaseModel):
                 'SystemDesign': {
                     'system_capacity': self.TechnologyModel.Capacity * 1000,
                     'dc_ac_ratio': self.TechnologyModel.DCRatio,
-                    'tilt': self.Tilt,
+                    'tilt': 0 if ARRAY_MAP[self.TechnologyModel.ArrayType] >= 2 else self.Tilt,
                     'azimuth': self.TechnologyModel.Azimuth,
                     'inv_eff': self.TechnologyModel.InvEff,
                     'losses': self.TechnologyModel.Losses,
@@ -862,14 +894,16 @@ class SolarModel(BaseModel):
         PV_MODEL.execute()
         out_solar = PV_MODEL.Outputs.export()
 
-        curtailed_gen = pandas.Series(out_solar['gen'])
-        if self.RevenueModel.IncludeCurtailment:
-            curtailed_gen = pandas.Series(out_solar['gen']).clip(0, self.CurtailmentModel.Unfixed)
-
         # Build the Solar Models
         gen = pandas.concat([df.assign(Year=year) for year in self.PeriodModel.Years])
         idx = pandas.to_datetime(gen[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(f'Etc/GMT+{-self.WeatherModel.TimeZone}').dt.tz_convert('US/Central')
         gen = gen.assign(HourEnding=idx.dt.hour + 1).set_index(idx).sort_index().shift(freq='1h').assign(Gen=out_solar['gen'] * self.FinanceModel.Term)
+
+        # Curtail the generation if turned on
+        curtailed_gen = pandas.Series(out_solar['gen'])
+        if self.RevenueModel.IncludeCurtailment:
+            curtailment_perc = df.merge(self.CurtailmentModel.Unfixed)['ERCOT']
+            curtailed_gen = (1 - curtailment_perc) * curtailed_gen
 
         # Build the price models
         energy_prices = self.EnergyModel.Unfixed.reindex(gen.index).fillna(0)
@@ -930,9 +964,8 @@ class SolarModel(BaseModel):
 
                 'SystemCosts': {
                     'om_fixed': [self.OperatingCostModel.AnnualCost],
-                    'om_capacity': [self.OperatingCostModel.AnnualCostByCapacity],
+                    'om_capacity': [self.OperatingCostModel.AnnualCostByCapacity / self.TechnologyModel.DCRatio],
                     'om_production': [self.OperatingCostModel.VariableCostGen],
-
                     'total_installed_cost': self.total_installed_cost(),
                 },
 
@@ -943,8 +976,8 @@ class SolarModel(BaseModel):
                     'ptc_sta_amount': [self.RevenueModel.StatePTC],
                     'ptc_fed_escal': self.FinanceModel.InflationRate,
                     'ptc_sta_escal': self.FinanceModel.InflationRate,
-                    'ptc_fed_term': 10,
-                    'ptc_sta_term': 10,
+                    'ptc_fed_term': self.RevenueModel.FederalPTCTerm,
+                    'ptc_sta_term': self.RevenueModel.StatePTCTerm,
                 }
             }
         )
@@ -959,7 +992,7 @@ class SolarModel(BaseModel):
         cannib_revenue = total_revenue * cannib_prices/final_prices
         rec_revenue = total_revenue * rec_prices/final_prices
 
-        self.FairValue = sum(out_merc['cf_energy_market_revenue']) / (sum(out_merc['cf_energy_net']) / 1000)
+        self.PPAPrice = sum(total_revenue) / (sum(out_merc['cf_energy_net']) / 1000)
         self.LCOEReal = out_merc['lcoe_real'] * 10
         self.LCOENom = out_merc['lcoe_nom'] * 10
         self.NPV = out_merc["project_return_aftertax_npv"]
@@ -976,10 +1009,10 @@ class SolarModel(BaseModel):
             'Energy': [],
             'Net Energy Production (MWh)': numpy.array(out_merc['cf_energy_net']) / 1000,
             'Curtailed Energy (MWh)': numpy.array(out_merc['cf_energy_net']) / 1000,
-            'Energy Revenue ($)': self.RevenueTable['Energy Revenue ($)'].tolist(),
-            'REC Revenue ($)': self.RevenueTable['REC Revenue ($)'].tolist(),
-            'Cannibalization Adjustment ($)': self.RevenueTable['Cannibalization Adjustment ($)'].tolist(),
-            'Total Revenue ($)': self.RevenueTable.sum(axis=1).tolist(),
+            'Energy Revenue ($)': [None] + self.RevenueTable['Energy Revenue ($)'].tolist(),
+            'REC Revenue ($)': [None] + self.RevenueTable['REC Revenue ($)'].tolist(),
+            'Cannibalization Adjustment ($)': [None] + self.RevenueTable['Cannibalization Adjustment ($)'].tolist(),
+            'Total Revenue ($)': [None] + self.RevenueTable.sum(axis=1).tolist(),
             'O&M Cost': [],
             'Operating Cost Capacity ($)': numpy.array(out_merc['cf_om_capacity_expense']) * -1,
             'Operating Cost Fixed ($)': numpy.array(out_merc['cf_om_fixed_expense']) * -1,
@@ -1013,7 +1046,8 @@ class SolarModel(BaseModel):
         }).apply(pandas.Series).round(2).set_axis(self.PeriodModel.CashFlowYears, axis=1).T
 
         self.SummaryTable = pandas.Series({
-            'Energy Production (MWh)': sum(out_merc['cf_energy_net']) / 1000,
+            'Year 1 Energy Production (MWh)': sum(out_solar['gen']) / 1000,
+            'Year 1 Energy Curtailed (MWh)': (sum(out_solar['gen']) - curtailed_gen.sum())/1000,
             'Capacity Factor (%)': self.CapacityFactor,
             'Energy Revenue ($)': sum(energy_revenue.fillna(0)),
             'REC Revenue ($)': sum(rec_revenue.fillna(0)),
@@ -1036,6 +1070,13 @@ class SolarModel(BaseModel):
             'Indirect Capital Cost ($)': self.IndirectCosts,
         }).round(2).reset_index().set_axis(['Metric', 'Value'], axis=1)
 
+        self.SolarWeightedAverage = gen.assign(Px=energy_prices).groupby('Year').apply(lambda x: numpy.average(x['Px'], weights=x['MW']), include_groups=False)
+        self.BaseLoadAverage = gen.assign(Px=energy_prices).groupby('Year')['Px'].apply(numpy.mean, include_groups=False)
+        self.CaptureTable = pandas.concat([
+            self.SolarWeightedAverage.to_frame('Solar Weighted Price'),
+            self.BaseLoadAverage.to_frame('Average Price'),
+            (self.SolarWeightedAverage/self.BaseLoadAverage).to_frame('Capture Rate (%)'),
+        ], axis=1)
         return gen
 
     def projected(self):
@@ -1114,11 +1155,16 @@ class CurtailmentModel(BaseModel):
     def __init__(self, zone, models):
         super().__init__(models)
         self.Zone = zone
-        self.Unfixed = self.hist_curtailment()
+        self.Fixed = self.hist_curtailment()
+        self.Unfixed = self.forward_curtailment()
         self.S2 = datetime.datetime.now()
 
     def hist_curtailment(self):
-        return [0 * self.Capacity] * 8760
+        return pandas.read_csv('data/Curtailment/Curtailment.csv')
+
+    def forward_curtailment(self):
+        hist = self.Fixed
+        return hist.groupby('Month').mean()['ERCOT'].reset_index()
 
 
 class RECModel(BaseModel):
@@ -1183,6 +1229,7 @@ class EnergyModel(BaseModel):
 class Model(BaseModel):
     def __init__(self, models):
         super().__init__(models)
+        self.Optimal = False
         self.WeatherModel = WeatherModel([self.LocationModel, self.PeriodModel])
         self.SolarModel = SolarModel([
             self.LocationModel,
@@ -1207,7 +1254,7 @@ class Models(BaseModel):
         super().__init__()
         self.Lats = COUNTIES['X (Lat)'].tolist()
         self.Longs = COUNTIES['Y (Long)'].tolist()
-        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:5]
+        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:1]
         self.Zones = set([i.Zone for i in self.Locations])
         self.TimeZones = set([i.TimeZone for i in self.Locations])
         self.TechnologyModel = TechnologyModel()
@@ -1252,22 +1299,24 @@ class RunModel(BaseModel):
         self.CannibModels = {i: CannibalizationModel(i, [self.EnergyModels[i]]) for i in self.Zones}
         self.CurtailModels = {i: CurtailmentModel(i, [self.TechnologyModel, self.EnergyModels[i]]) for i in self.Zones}
         self.RECModel = RECModel([self.PeriodModel])
-        # with Pool() as pool:
-        #     self.Models = pool.map(self.build_mode, self.Locations)
-        self.Models = [self.build_mode(i) for i in self.Locations]
-        self.DF = self.build_dataframe()
+        with Pool() as pool:
+            self.Models = pool.map(self.build_mode, self.Locations)
+        # self.Models = [self.build_mode(i) for i in self.Locations]
         self.optimal_county()
+        self.DF = self.build_dataframe()
 
     def build_dataframe(self):
-        cols = ['Name', 'FIPS', 'Lat', 'Long', 'Zone', 'LandPrice', 'PropertyTax', 'FairValue', 'AverageDNI',
-                'AverageDHI', 'AverageMW', 'LCOEReal', 'LCOENom', 'NPV', 'IRR', '100_161_kV', '220_287_kV', '345_kV',
-                '500_kV']
+        cols = [
+            'Zone', 'Optimal', 'NPV', 'IRR', 'LCOEReal', 'LCOENom', 'PPAPrice', 'AverageDHI', 'AverageDNI', 'AverageMW',
+            'LandPrice', 'PropertyTax', '100_161_kV', '220_287_kV', '345_kV', '500_kV', 'Name', 'FIPS', 'Lat', 'Long'
+        ]
         return pandas.DataFrame({col: [getattr(i, col) for i in self.Models] for col in cols}).round(2)
 
     def optimal_county(self, metric='NPV'):
         self.OptimalCountyModel = self.Models[pandas.Series([getattr(i, metric) for i in self.Models]).idxmax()]
+        self.OptimalCountyModel.Optimal = True
         self.OptimalCountyName = self.OptimalCountyModel.Name
-        self.OptimalCountySummary = self.OptimalCountyModel.SummaryTable.loc[[0, 1, 6, 7, 8, 9, 10, 11]]
+        self.OptimalCountySummary = self.OptimalCountyModel.SummaryTable.loc[[0, 2, 7, 8, 9, 10, 11, 12]]
         tab_data = self.OptimalCountySummary.round(2).to_dict('records')
         tab_cols = [{"name": str(i), "id": str(i), 'type': 'numeric', 'format': Format(group=',')} for i in self.OptimalCountySummary.columns]
         return tab_data, tab_cols
@@ -1366,7 +1415,7 @@ def setup_app(model):
                             html.Div(
                                 [
                                     html.P(f'Optimal County: {model.RunModel.OptimalCountyName}',
-                                           style={'text-align': 'center', 'width': '100%', "font-weight": "bold", 'height': '4vh', 'border': '2px black solid', 'align': 'center'}
+                                           style={'text-align': 'center', 'width': '100%', "font-weight": "bold", 'height': '4vh', 'padding-top': '1.5vh', 'font-size': '20px'}
                                            ),
                                     dash.dash_table.DataTable(
                                         data=opt_tab,
@@ -1377,7 +1426,7 @@ def setup_app(model):
                                     ),
                                     html.P(f'County: ',
                                            id={'type': 'summary_data_table_label', 'name': model_name},
-                                           style={'text-align': 'center', 'width': '100%', "font-weight": "bold", 'height': '4vh', 'border': '2px black solid', 'align': 'center'}
+                                           style={'text-align': 'center', 'width': '100%', "font-weight": "bold", 'height': '4vh', 'padding-top': '1.5vh', 'font-size': '20px'}
                                            ),
                                     dash.dash_table.DataTable(
                                         id={'type': 'summary_data_table', 'name': model_name},
@@ -1394,11 +1443,19 @@ def setup_app(model):
                                             children=html.Div([
                                                 dcc.Graph(
                                                     id={'type': 'hourly-x-graph', 'name': model_name},
-                                                    style={'height': '65vh', 'width': '50%', 'display': 'inline-block', 'border': '2px black solid'}
+                                                    style={'height': '65vh', 'width': '50%', 'display': 'inline-block'}
                                                 ),
                                                 dcc.Graph(
                                                     id={'type': 'monthly-x-graph', 'name': model_name},
-                                                    style={'height': '65vh', 'width': '50%', 'display': 'inline-block', 'border': '2px black solid'}
+                                                    style={'height': '65vh', 'width': '50%', 'display': 'inline-block'}
+                                                ),
+                                                dcc.Graph(
+                                                    id={'type': 'capture-x-graph', 'name': model_name},
+                                                    style={'height': '65vh', 'width': '50%', 'display': 'inline-block'}
+                                                ),
+                                                dcc.Graph(
+                                                    id={'type': 'cashflow-x-graph', 'name': model_name},
+                                                    style={'height': '65vh', 'width': '50%', 'display': 'inline-block'}
                                                 )
                                             ])
                                             ),
@@ -1459,6 +1516,8 @@ def setup_app(model):
         dash.dependencies.Output({"type": 'data_table', "name": MATCH}, 'columns'),
         dash.dependencies.Output({"type": 'hourly-x-graph', "name": MATCH}, 'figure'),
         dash.dependencies.Output({"type": 'monthly-x-graph', "name": MATCH}, 'figure'),
+        dash.dependencies.Output({"type": 'capture-x-graph', "name": MATCH}, 'figure'),
+        dash.dependencies.Output({"type": 'cashflow-x-graph', "name": MATCH}, 'figure'),
         dash.dependencies.Input({"type": "map", "name": MATCH}, "clickData"),
     )
     def update_county_profile(clickData):
@@ -1472,13 +1531,16 @@ def setup_app(model):
         county_label = f'County: {county_model.Name}'
         hourly_graph = county_model.HourlyProfile.T
         monthly_graph = county_model.MonthlyProfile.T
-        # Update the Graph
+        capture_graph = county_model.CaptureTable['Capture Rate (%)'] * 100
+        cashflow_graph = county_model.CashFlowTable['Total After-tax Returns ($)']
+
+        # Update the Graphs
         hourly_plt_dct = {
             'data': [{'x': hourly_graph.index, 'y': hourly_graph[i], 'type': 'line', 'name': i} for i in hourly_graph.columns],
             'layout': {
                 'title': {'text': f'{county} Hourly Generation Profile'},
                 'xaxis': {'title': 'Hourending', 'dtick': 1},
-                'yaxis': {'range': [0, hourly_graph.max(axis=1).max() * 1.1], 'title': 'Avg Hourly Generation (MWh)'}
+                'yaxis': {'range': [0, hourly_graph.max(axis=1).max() * 1.1], 'title': 'Hourly Generation (MWh)'}
             }
 
         }
@@ -1488,7 +1550,27 @@ def setup_app(model):
             'layout': {
                 'title': {'text': f'{county} Monthly Generation Profile'},
                 'xaxis': {'title': 'Month', 'range': [1, 12], 'dtick': 1},
-                'yaxis': {'range': [monthly_graph.min() * 0.9, monthly_graph.max() * 1.1], 'title': 'Avg Monthly Generation (MWh)'}
+                'yaxis': {'range': [monthly_graph.min() * 0.9, monthly_graph.max() * 1.1], 'title': 'Monthly Generation (MWh)'}
+            }
+
+        }
+
+        capture_plt_dct = {
+            'data': [{'x': capture_graph.index, 'y': capture_graph.tolist(), 'type': 'line', 'name': 'Capture'}],
+            'layout': {
+                'title': {'text': f'{county} Solar Capture Rate (%)'},
+                'xaxis': {'title': 'Year', 'dtick': 1},
+                'yaxis': {'range': [capture_graph.min() * 0.9, capture_graph.max() * 1.1], 'title': 'Solar Capture Rate (%)'}
+            }
+
+        }
+
+        cashflow_plt_dct = {
+            'data': [{'x': cashflow_graph.index, 'y': cashflow_graph.tolist(), 'type': 'bar', 'name': 'Cashflow'}],
+            'layout': {
+                'title': {'text': f'{county} Yearly Cash Flows ($)'},
+                'xaxis': {'title': 'Year', 'dtick': 1},
+                'yaxis': {'range': [cashflow_graph.min() * 0.9, cashflow_graph.max() * 1.1], 'title': 'Cash Flow ($)'}
             }
 
         }
@@ -1502,7 +1584,7 @@ def setup_app(model):
         sum_tab_data = sum_data.round(2).to_dict('records')
         sum_tab_cols = [{"name": str(i), "id": str(i), 'type': 'numeric', 'format': Format(group=',')} for i in sum_data.columns]
 
-        return county_label, sum_tab_data, sum_tab_cols, tab_data, tab_cols, hourly_plt_dct, monthly_plt_dct
+        return county_label, sum_tab_data, sum_tab_cols, tab_data, tab_cols, hourly_plt_dct, monthly_plt_dct, capture_plt_dct, cashflow_plt_dct
 
     @app.callback(
         dash.dependencies.Output('tabs', 'children', allow_duplicate=True),
