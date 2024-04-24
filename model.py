@@ -32,6 +32,9 @@ class BaseModel:
         self.update_model(models, update_sub_parmas)
         self.ModelsIn = models
 
+    def __repr__(self):
+        return self.__class__.__name__
+
     @property
     def ExecutionTime(self):
         return (self.S2 - self.S1).total_seconds()
@@ -59,7 +62,8 @@ class LocationModel(BaseModel):
         self.Name = self.Info['CNTY_NM']
         self.FIPS = self.Info['FIPS']
         self.TimeZone = FINDER.timezone_at(lng=self.Long, lat=self.Lat)
-        self.Zone = self.Info['ZONE'] # closest_key(ZONAL_MAP, (lat, long))
+        self.Zone = self.Info['ZONE'] or closest_key(ZONAL_MAP, (lat, long))
+        self.IsERCOT = True if self.Info['ZONE'] else False
         self.LandPrice = LAND_PRICES[self.Name]['Data']['2023']
         self.PropertyTax = PROP_TAXES[self.Name]
         self.LandRegion = LAND_PRICES[self.Name]['Region']
@@ -77,12 +81,15 @@ class LocationModel(BaseModel):
 
     def trans_distance(self):
         dct = {}
-        for voltage in {'220-287', '500', '100-161', '345'}:
+        for voltage in {'220-287', '100-161', '345', '500'}:
             key = f'{voltage.replace("-", "_")}_kV'
             temp_df = TRANS_CORDS[TRANS_CORDS['Voltage'] == voltage]
-            idx = ((temp_df.Lat - self.Lat).pow(2) + (temp_df.Lon - self.Long).pow(2)).pow(0.5).idxmin()
-            cord = temp_df.loc[idx, ['Lat', 'Lon']].tolist()
-            dct[key] = geopy.distance.geodesic(cord, (self.Lat, self.Long)).miles
+            if len(temp_df):
+                idx = ((temp_df.Lat - self.Lat).pow(2) + (temp_df.Lon - self.Long).pow(2)).pow(0.5).idxmin()
+                cord = temp_df.loc[idx, ['Lat', 'Lon']].tolist()
+                dct[key] = geopy.distance.geodesic(cord, (self.Lat, self.Long)).miles
+            else:
+                dct[key] = 9e9
             setattr(self, key, dct[key])
         return {}
 
@@ -136,9 +143,6 @@ class TechnologyModel(BaseModel):
         self.ModuleType = 'Premium'
         self.S2 = datetime.datetime.now()
 
-    def __repr__(self):
-        return self.__class__.__name__
-
     @property
     def ModuleEfficiency(self):
         return MODULE_EFF[self.ModuleType]
@@ -179,7 +183,7 @@ class TechnologyModel(BaseModel):
                             [
                                 html.P('DC Ratio', style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'DCRatio'}, type='number', value=self.DCRatio,
-                                          step=0.1,
+                                          step=0.01,
                                           style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
@@ -222,7 +226,7 @@ class TechnologyModel(BaseModel):
                         html.Div(
                             [
                                 html.P('Ground Coverage Ratio', style={'display': 'inline-block', 'width': '35%'}),
-                                dcc.Input(id={'type': 'param', 'name': 'GCR'}, type='number', value=self.GCR, step=0.1,
+                                dcc.Input(id={'type': 'param', 'name': 'GCR'}, type='number', value=self.GCR, step=0.01,
                                           style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
@@ -238,7 +242,7 @@ class TechnologyModel(BaseModel):
                             [
                                 html.P('Total Losses (%)', style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'Losses'}, type='number', value=self.Losses,
-                                          step=1,
+                                          step=0.01,
                                           style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
@@ -264,7 +268,7 @@ class RevenueModel(BaseModel):
     def __init__(self):
         super().__init__()
         self.IncludeCannib = True
-        self.IncludeCurtailment = False
+        self.IncludeCurtailment = True
         self.IncludeRECs = True
         self.FederalPTC = 0.0275
         self.FederalPTCTerm = 10
@@ -279,31 +283,65 @@ class RevenueModel(BaseModel):
                     [
                         html.P('Revenue Adjustments',
                                style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
-                        html.Div(
+
+                        dcc.Checklist(
                             [
-                                daq.ToggleSwitch(label='Include Cannibalization Adjustment',
-                                                 value=self.IncludeCannib,
-                                                 id={'type': 'param', 'name': 'IncludeCannib'},
-                                                 style={'display': 'inline-block', 'width': '60%'}),
-                            ], style={'display': 'flex', 'justify-content': 'center', 'height': '7vh', 'margin': '10px'}
+                                {
+                                    "label": html.Div(['Include Cannibalization Adjustment'],
+                                                      style={
+                                                          'color': 'Black',
+                                                          'font-size': 18,
+                                                          'justify-content': 'center',
+                                                          "align-items": "center",
+                                                          'margin': '10px',
+                                                      }),
+                                    "value": 'Include Cannibalization Adjustment',
+                                },
+                            ],
+                            value=['Include Cannibalization Adjustment'] if self.IncludeCannib else [],
+                            id={'type': 'param', 'name': 'IncludeCannib'},
+                            labelStyle={"display": "flex", 'justify-content': 'center', "align-items": "center"}
                         ),
-                        html.Div(
+
+                        dcc.Checklist(
                             [
-                                daq.ToggleSwitch(label='Include Curtailment Adjustment',
-                                                 value=self.IncludeCurtailment,
-                                                 id={'type': 'param', 'name': 'IncludeCurtailment'},
-                                                 style={'display': 'inline-block', 'width': '60%'}),
-                            ], style={'display': 'flex', 'justify-content': 'center', 'height': '7vh', 'margin': '10px'}
+                                {
+                                    "label": html.Div(['Include Curtailment Adjustment'],
+                                                      style={
+                                                          'color': 'Black',
+                                                          'font-size': 18,
+                                                          'justify-content': 'center',
+                                                          "align-items": "center",
+                                                          'margin': '10px',
+                                                      }),
+                                    "value": 'Include Curtailment Adjustment',
+                                },
+                            ],
+                            value=['Include Curtailment Adjustment'] if self.IncludeCurtailment else [],
+                            id={'type': 'param', 'name': 'IncludeCurtailment'},
+                            labelStyle={"display": "flex", 'justify-content': 'center', "align-items": "center"}
                         ),
-                        html.Div(
+
+                        dcc.Checklist(
                             [
-                                daq.ToggleSwitch(label='Include REC Value', id={'type': 'param', 'name': 'IncludeRECs'},
-                                                 value=self.IncludeRECs,
-                                                 style={'display': 'inline-block', 'width': '60%'}),
-                            ], style={'display': 'flex', 'justify-content': 'center', 'height': '7vh', 'margin': '10px'}
+                                {
+                                    "label": html.Div(['Include REC Value'],
+                                                      style={
+                                                          'color': 'Black',
+                                                          'font-size': 18,
+                                                          'justify-content': 'center',
+                                                          "align-items": "center",
+                                                          'margin': '10px',
+                                                      }),
+                                    "value": 'Include REC Value',
+                                },
+                            ],
+                            value=['Include REC Value'] if self.IncludeRECs else [],
+                            id={'type': 'param', 'name': 'IncludeRECs'},
+                            labelStyle={"display": "flex", 'justify-content': 'center', "align-items": "center"}
                         ),
                     ], style={'width': '50%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top',
-                              'border-radius': '15px', 'background-color': 'beige', 'margin': '10px'}
+                              'border-radius': '15px', 'background-color': 'beige', 'margin': '10px', "align-items": "center"}
                 ),
                 html.Div(
                     [
@@ -314,7 +352,7 @@ class RevenueModel(BaseModel):
                                 html.P('Federal Production Tax Credit ($/MWh)',
                                        style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'FederalPTC'}, type='number',
-                                          value=self.FederalPTC, step=1,
+                                          value=self.FederalPTC, step=0.0001,
                                           style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
@@ -334,7 +372,7 @@ class RevenueModel(BaseModel):
                                 html.P('State Production Tax Credit ($/MWh)',
                                        style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'StatePTC'}, type='number', value=self.StatePTC,
-                                          step=1, style={'display': 'inline-block', 'width': '60%'}),
+                                          step=0.0001, style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
                         ),
@@ -446,7 +484,7 @@ class CapitalCostModel(BaseModel):
                             [
                                 html.P('Transmission Cost ($/mile)', style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'TransmissionCost'}, type='number',
-                                          value=self.TransmissionCost, step=1e3,
+                                          value=self.TransmissionCost,
                                           style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
@@ -562,6 +600,8 @@ class FinanceModel(BaseModel):
         self.FederalInvestmentTaxCredit = 0
         self.EquipmentReserve = 0.1
         self.EquipmentReserveFreq = 15
+        self.ReserveInterest = 1.75
+        self.ReserveOperatingMonths = 6
         self.StateInvestmentTaxCredit = 0
         self.S2 = datetime.datetime.now()
 
@@ -630,7 +670,7 @@ class FinanceModel(BaseModel):
                             [
                                 html.P('Debt Fraction (%)', style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'DebtFraction'}, type='number',
-                                          value=self.DebtFraction, step=1,
+                                          value=self.DebtFraction, step=0.1,
                                           style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
@@ -657,7 +697,7 @@ class FinanceModel(BaseModel):
                             [
                                 html.P('Debt Upfront Fee (%)', style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'DebtUpfrontFee'}, type='number',
-                                          value=self.DebtUpfrontFee, step=1,
+                                          value=self.DebtUpfrontFee, step=0.01,
                                           style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
@@ -701,7 +741,7 @@ class FinanceModel(BaseModel):
                                 html.P('State Sales Tax Rate (%)', style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'SalesTaxRate'}, type='number',
                                           value=self.SalesTaxRate,
-                                          step=1, style={'display': 'inline-block', 'width': '60%'}),
+                                          step=0.01, style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
                         ),
@@ -741,10 +781,30 @@ class FinanceModel(BaseModel):
                                style={'textAlign': 'center', 'width': '100%', "font-weight": "bold"}),
                         html.Div(
                             [
-                                html.P('Equipment Reserve ($/W)',
+                                html.P('Months of Operating Cost Reserve (Months)',
+                                       style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'ReserveOperatingMonths'}, type='number',
+                                          value=self.ReserveOperatingMonths, step=1,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Interest on Reserves (%/year)',
+                                       style={'display': 'inline-block', 'width': '35%'}),
+                                dcc.Input(id={'type': 'param', 'name': 'ReserveInterest'}, type='number',
+                                          value=self.ReserveInterest, step=0.01,
+                                          style={'display': 'inline-block', 'width': '60%'}),
+                            ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
+                                      'margin': '5px'}
+                        ),
+                        html.Div(
+                            [
+                                html.P('Equipment Reserve ($/Wdc)',
                                        style={'display': 'inline-block', 'width': '35%'}),
                                 dcc.Input(id={'type': 'param', 'name': 'EquipmentReserve'}, type='number',
-                                          value=self.EquipmentReserve, step=1,
+                                          value=self.EquipmentReserve, step=0.1,
                                           style={'display': 'inline-block', 'width': '60%'}),
                             ], style={'display': 'flex', 'justify-content': 'space-evenly', 'height': '5vh',
                                       'margin': '5px'}
@@ -901,14 +961,14 @@ class SolarModel(BaseModel):
 
         # Curtail the generation if turned on
         curtailed_gen = pandas.Series(out_solar['gen'])
-        if self.RevenueModel.IncludeCurtailment:
+        if bool(self.RevenueModel.IncludeCurtailment):
             curtailment_perc = df.merge(self.CurtailmentModel.Unfixed)['ERCOT']
             curtailed_gen = (1 - curtailment_perc) * curtailed_gen
 
         # Build the price models
         energy_prices = self.EnergyModel.Unfixed.reindex(gen.index).fillna(0)
-        cannib_prices = self.CannibalizationModel.Unfixed.reindex(gen.index).fillna(0) * self.RevenueModel.IncludeCannib
-        rec_prices = self.RECModel.Unfixed.reindex(gen.index).fillna(0) * self.RevenueModel.IncludeRECs
+        cannib_prices = self.CannibalizationModel.Unfixed.reindex(gen.index).fillna(0) * bool(self.RevenueModel.IncludeCannib)
+        rec_prices = self.RECModel.Unfixed.reindex(gen.index).fillna(0) * bool(self.RevenueModel.IncludeRECs)
         final_prices = energy_prices + cannib_prices + rec_prices
 
         MERC_MODEL.assign(
@@ -939,7 +999,8 @@ class SolarModel(BaseModel):
                     'term_int_rate': self.FinanceModel.DebtInterestRate,
                     'term_tenor': self.FinanceModel.DebtTenor,
                     'cost_debt_fee': self.FinanceModel.DebtUpfrontFee,
-
+                    'months_working_reserve': self.FinanceModel.ReserveOperatingMonths,
+                    'reserves_interest': self.FinanceModel.ReserveInterest,
                     'equip1_reserve_freq': self.FinanceModel.EquipmentReserveFreq,
                     'equip1_reserve_cost': self.FinanceModel.EquipmentReserve
                 },
@@ -1003,16 +1064,16 @@ class SolarModel(BaseModel):
             'Energy Revenue ($)': energy_revenue,
             'REC Revenue ($)': rec_revenue,
             'Cannibalization Adjustment ($)': cannib_revenue,
-        }, index=gen.index).shift(freq='-1min').resample('YS').sum().rename(lambda x: x.year)
+        }, index=gen.index).shift(freq='-1min').resample('YS').sum().rename(lambda x: x.year).reindex(self.PeriodModel.CashFlowYears)
 
         self.CashFlowTable = pandas.Series({
             'Energy': [],
             'Net Energy Production (MWh)': numpy.array(out_merc['cf_energy_net']) / 1000,
             'Curtailed Energy (MWh)': numpy.array(out_merc['cf_energy_net']) / 1000,
-            'Energy Revenue ($)': [None] + self.RevenueTable['Energy Revenue ($)'].tolist(),
-            'REC Revenue ($)': [None] + self.RevenueTable['REC Revenue ($)'].tolist(),
-            'Cannibalization Adjustment ($)': [None] + self.RevenueTable['Cannibalization Adjustment ($)'].tolist(),
-            'Total Revenue ($)': [None] + self.RevenueTable.sum(axis=1).tolist(),
+            'Energy Revenue ($)': self.RevenueTable['Energy Revenue ($)'].tolist(),
+            'REC Revenue ($)': self.RevenueTable['REC Revenue ($)'].tolist(),
+            'Cannibalization Adjustment ($)': self.RevenueTable['Cannibalization Adjustment ($)'].tolist(),
+            'Total Revenue ($)': self.RevenueTable.sum(axis=1).tolist(),
             'O&M Cost': [],
             'Operating Cost Capacity ($)': numpy.array(out_merc['cf_om_capacity_expense']) * -1,
             'Operating Cost Fixed ($)': numpy.array(out_merc['cf_om_fixed_expense']) * -1,
@@ -1248,13 +1309,15 @@ class Model(BaseModel):
         self.update_model([self.WeatherModel, self.SolarModel, self.RevenueModel])
         self.S2 = datetime.datetime.now()
 
+    def __repr__(self):
+        return self.__class__.__name__ + ' ' + self.LocationModel.Name
 
 class Models(BaseModel):
     def __init__(self):
         super().__init__()
         self.Lats = COUNTIES['X (Lat)'].tolist()
         self.Longs = COUNTIES['Y (Long)'].tolist()
-        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:1]
+        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)]
         self.Zones = set([i.Zone for i in self.Locations])
         self.TimeZones = set([i.TimeZone for i in self.Locations])
         self.TechnologyModel = TechnologyModel()
@@ -1294,6 +1357,7 @@ class RunModel(BaseModel):
         self.__init__(self.ModelsIn)
 
     def rebuild(self):
+        self.S1 = datetime.datetime.now()
         self.PeriodModel = PeriodModel(self.FinanceModel.StartDate, self.FinanceModel.EndDate, 'US/Central')
         self.EnergyModels = {i: EnergyModel(i, [self.PeriodModel]) for i in self.Zones}
         self.CannibModels = {i: CannibalizationModel(i, [self.EnergyModels[i]]) for i in self.Zones}
@@ -1304,6 +1368,8 @@ class RunModel(BaseModel):
         # self.Models = [self.build_mode(i) for i in self.Locations]
         self.optimal_county()
         self.DF = self.build_dataframe()
+        self.execution_time_profile()
+        self.S2 = datetime.datetime.now()
 
     def build_dataframe(self):
         cols = [
@@ -1321,9 +1387,45 @@ class RunModel(BaseModel):
         tab_cols = [{"name": str(i), "id": str(i), 'type': 'numeric', 'format': Format(group=',')} for i in self.OptimalCountySummary.columns]
         return tab_data, tab_cols
 
-    def render(self):
-        return html.Div([html.Button('Run', id='run'), dcc.Input(id='model_name', value='Model1', type="text")])
+    def execution_time_profile(self):
+        models = {}
+        def add_time(val):
+            if hasattr(val, 'ExecutionTime'):
+                models[(val.__class__.__name__, '')] = val.ExecutionTime
+            if isinstance(val, list):
+                for model in val:
+                    if hasattr(model, 'ExecutionTime'):
+                        models[(model.__class__.__name__, str(model))] = model.ExecutionTime
+            if isinstance(val, dict):
+                for key, model in val.items():
+                    if hasattr(model, 'ExecutionTime'):
+                        models[(model.__class__.__name__, str(model))] = model.ExecutionTime
 
+        for key, val in vars(self).items():
+            add_time(val)
+            if isinstance(val, type):
+                for key, val_sub in vars(val).items():
+                    if isinstance(val, type):
+                        add_time(val_sub)
+
+        self.ExecutionTimeProfile = pandas.Series(models)
+        return pandas.Series(models)
+
+    def render(self):
+        return html.Div(
+            [
+                html.Div(
+                    [
+                        html.Div([
+                            html.Button('Run', id='run', style={'width': '25%', 'font-size': '20px'}),
+                            dcc.Input(id='model_name', value='Model1', type="text", style={'width': '75%', 'font-size': '20px'})
+                        ], style={'display': 'flex', 'height': '5vh', 'margin': '10px'}
+                        ),
+                    ], style={'width': '30%', "border": "2px black solid", 'display': 'block', 'vertical-align': 'top',
+                              'border-radius': '15px', 'background-color': 'beige', 'margin': '10px'}
+                ),
+            ]
+        )
 
 def setup_app(model):
     app = Dash(__name__, external_stylesheets=[dbc.themes.LUX])
@@ -1366,7 +1468,6 @@ def setup_app(model):
     )
     def run(value, model_name, children):
         triggered = dash.callback_context.triggered
-        print(triggered)
         if 'run' in triggered[0]['prop_id'] and value > model.RunModel.RunTacker:
             assert model_name not in model_cache
             model.RunModel.RunTacker = value
@@ -1384,11 +1485,25 @@ def setup_app(model):
                                     [
                                         html.Div(
                                             dcc.Dropdown(model.RunModel.DF.columns, 'Zone', id={'type': 'map-select', 'name': model_name}),
-                                            style={'width': '60%', 'display': 'inline-block', 'height': '4vh', 'border': '2px black solid'}
+                                            style={'width': '50%', 'display': 'inline-block', 'height': '4vh'}
                                         ),
                                         html.Div(
-                                            dcc.Dropdown(['None', 'All', '100-161', '220-287', '345', '500'], 'None', id={'type': 'trans-select', 'name': model_name}),
-                                            style={'width': '25%', 'display': 'inline-block', 'height': '4vh', 'border': '2px black solid'}
+                                            dcc.Dropdown(['None', 'All', '100-161 kV', '220-287 kV', '345 kV', '500 kV'], 'None', id={'type': 'trans-select', 'name': model_name}),
+                                            style={'width': '20%', 'display': 'inline-block', 'height': '4vh'}
+                                        ),
+                                        html.Div(
+                                            dcc.Checklist(
+                                                [
+                                                    {
+                                                        "label": html.Div(['Show Load Zone'], style={'color': 'Black', 'font-size': 20, "font-weight": "bold"}),
+                                                        "value": "Show Load Zone",
+                                                    },
+                                                ],
+                                                value=[],
+                                                id={'type': 'load-zone-select', 'name': model_name},
+                                                labelStyle={"display": "flex", "align-items": "center"}
+                                            ),
+                                            style={'width': '20%', 'display': 'inline-block', 'height': '4vh'}
                                         ),
                                     ],
                                     style={'display': 'flex', 'justify-content': 'space-between', 'height': '4vh'}
@@ -1482,8 +1597,9 @@ def setup_app(model):
         dash.dependencies.Output({"type": "map", "name": MATCH}, 'figure'),
         dash.dependencies.Input({"type": "map-select", "name": MATCH}, "value"),
         dash.dependencies.Input({"type": "trans-select", "name": MATCH}, "value"),
+        dash.dependencies.Input({"type": "load-zone-select", "name": MATCH}, "value"),
     )
-    def update_map(value, add_trans):
+    def update_map(value, add_trans, add_load_zone):
         name = dash.callback_context.args_grouping[0]['id']['name']
         temp_model = model_cache.get(name, model)
         fig = px.choropleth(
@@ -1499,12 +1615,13 @@ def setup_app(model):
             basemap_visible=False,
             center={"lat": 31.391489, "lon": -99.174304}
         )
+        if len(add_load_zone):
+            fig.add_traces(LOAD_ZONE_TRACES)
         if add_trans != 'None':
             temp_cords = TRANS_CORDS
             if add_trans != 'All':
-                temp_cords = temp_cords[(temp_cords.Voltage == add_trans) | temp_cords.Voltage.isna()]
-            temp_trans_data = px.scatter_geo(temp_cords, 'Lat', 'Lon', text='Voltage').update_traces(mode="lines",
-                                                                                                     line_color="red").data
+                temp_cords = temp_cords[(temp_cords.Voltage == add_trans.replace(' kV', '')) | temp_cords.Voltage.isna()]
+            temp_trans_data = px.scatter_geo(temp_cords, 'Lat', 'Lon', text='Voltage').update_traces(mode="lines", line_color="red").data
             fig.add_traces(temp_trans_data)
         return fig
 
@@ -1521,7 +1638,7 @@ def setup_app(model):
         dash.dependencies.Input({"type": "map", "name": MATCH}, "clickData"),
     )
     def update_county_profile(clickData):
-        if clickData is None:
+        if clickData is None or clickData['points'][0].get('customdata') is None:
             return no_update
 
         name = dash.callback_context.args_grouping['id']['name']
@@ -1595,7 +1712,6 @@ def setup_app(model):
     )
     def delete_tab(run, children, name):
         triggered = dash.callback_context.triggered
-        print(triggered)
         if 'delete' in triggered[0]['prop_id'] and triggered[0]['value']:
             del model_cache[name]
             return [i for i in children if i['props']['label'] != name]
