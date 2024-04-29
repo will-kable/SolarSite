@@ -1739,37 +1739,4 @@ if __name__ == "__main__":
     out =[]
     model = Models()
     setup_app(model)
-    # model.RunModel.rebuild()
-
-    # model = Models()
-    # model.RunModel.rebuild()
-    # out = out + [(i.Zone, i.TotalRevenue, False, False) for i in model.RunModel.Models]
-    #
-    # model = Models()
-    # model.RunModel.RevenueModel.IncludeCannib = True
-    # model.RunModel.rebuild()
-    # out = out + [(i.Zone, i.TotalRevenue, True, False) for i in model.RunModel.Models]
-    #
-    # model = Models()
-    # model.RunModel.RevenueModel.IncludeCurtailment = True
-    # model.RunModel.rebuild()
-    # out = out + [(i.Zone, i.TotalRevenue, False, True) for i in model.RunModel.Models]
-    #
-    # model = Models()
-    # model.RunModel.RevenueModel.IncludeCurtailment = True
-    # model.RunModel.RevenueModel.IncludeCannib = True
-    # model.RunModel.rebuild()
-    # out = out + [(i.Zone, i.TotalRevenue, True, True) for i in model.RunModel.Models]
-
-    # model.RunModel.FinanceModel.FederalInvestmentTaxCredit = 0
-    # model.RunModel.rebuild()
-    # ptc = [(i.CapacityFactor, i.LCOEReal) for i in model.RunModel.Models]
-    #
-    # model = Models()
-    # model.RunModel.RevenueModel.FederalPTC = 0
-    # model.RunModel.FinanceModel.FederalInvestmentTaxCredit = 30
-    # model.RunModel.rebuild()
-    # itc = [(i.CapacityFactor, i.LCOEReal) for i in model.RunModel.Models]
-    #
-
 
