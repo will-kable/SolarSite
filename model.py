@@ -267,8 +267,8 @@ class TechnologyModel(BaseModel):
 class RevenueModel(BaseModel):
     def __init__(self):
         super().__init__()
-        self.IncludeCannib = True
-        self.IncludeCurtailment = True
+        self.IncludeCannib = False
+        self.IncludeCurtailment = False
         self.IncludeRECs = True
         self.FederalPTC = 0.0275
         self.FederalPTCTerm = 10
@@ -403,7 +403,7 @@ class CapitalCostModel(BaseModel):
         self.OverheadCost = 0.05
         self.ContingencyCost = 0.03
         self.PermittingCost = 0
-        self.GridConnectionCost = 0.03
+        self.GridConnectionCost = 0
         self.EngineeringCost = 0.08
         # https://www.nrel.gov/docs/fy22osti/83586.pdf
         self.TransmissionCost = 600734
@@ -586,7 +586,7 @@ class FinanceModel(BaseModel):
         super().__init__()
         self.Term = 25
         self.StartYear = datetime.date.today().year + 1
-        self.InflationRate = 2.5
+        self.InflationRate = 2
         self.DiscountRate = 6.4
         # https://www.nrel.gov/docs/fy22osti/80694.pdf
         self.DebtFraction = 71.8
@@ -595,7 +595,7 @@ class FinanceModel(BaseModel):
         self.DebtTenor = 18
         self.InsuranceRate = 0
         self.FederalTaxRate = 21
-        self.StateTaxRate = 7
+        self.StateTaxRate = 0
         self.SalesTaxRate = 6.25
         self.FederalInvestmentTaxCredit = 0
         self.EquipmentReserve = 0.1
@@ -847,6 +847,7 @@ class WeatherModel(BaseModel):
         self.Fixed = self.pull_historical()
         self.AverageDNI = self.Fixed['DNI'].mean()
         self.AverageDHI = self.Fixed['DHI'].mean()
+        self.AverageGHI = self.Fixed['GHI'].mean()
         self.S2 = datetime.datetime.now()
 
     def __repr__(self):
@@ -1008,10 +1009,10 @@ class SolarModel(BaseModel):
                 'Depreciation': {
                     'depr_alloc_macrs_5_percent': 100,
                     'depr_alloc_macrs_15_percent': 0,
-                    'depr_alloc_sl_15_percent': 0,
-                    'depr_alloc_sl_20_percent': 0,
-                    'depr_bonus_fed_macrs_15': 1,
-                    'depr_bonus_sta_macrs_15': 1,
+                    # 'depr_alloc_sl_15_percent': 0,
+                    # 'depr_alloc_sl_20_percent': 0,
+                    # 'depr_bonus_fed_macrs_15': 1,
+                    # 'depr_bonus_sta_macrs_15': 1,
                 },
 
                 'Revenue': {
@@ -1049,9 +1050,12 @@ class SolarModel(BaseModel):
         mws = numpy.array(out_merc['mp_total_cleared_capacity'])
         gen = gen.assign(MW=mws)
         total_revenue = numpy.array(out_merc['mp_energy_market_generated_revenue'])
-        energy_revenue = total_revenue * energy_prices/final_prices
-        cannib_revenue = total_revenue * cannib_prices/final_prices
-        rec_revenue = total_revenue * rec_prices/final_prices
+        self.TotalRevenue = sum(total_revenue)
+        energy_revenue = gen.MW * energy_prices
+        cannib_revenue = gen.MW * cannib_prices
+        rec_revenue = gen.MW * rec_prices
+        fed_ptc_revenue = gen.MW * self.RevenueModel.FederalPTC
+        sta_ptc_revenue = gen.MW * self.RevenueModel.StatePTC
 
         self.PPAPrice = sum(total_revenue) / (sum(out_merc['cf_energy_net']) / 1000)
         self.LCOEReal = out_merc['lcoe_real'] * 10
@@ -1114,7 +1118,7 @@ class SolarModel(BaseModel):
             'REC Revenue ($)': sum(rec_revenue.fillna(0)),
             'Cannibalization Adjustment ($)': sum(cannib_revenue.fillna(0)),
             'Total Revenue': sum(total_revenue),
-            'Solar Capture Rate (%)': ((gen['MW'] * energy_prices).sum() / gen['MW'].sum()) / energy_prices.mean() * 100,
+            'Solar Capture Rate (%)': ((energy_revenue + cannib_revenue).sum() / gen['MW'].sum()) / energy_prices.mean() * 100,
             'PPA Price ($/MWh)': sum(total_revenue) / (sum(out_merc['cf_energy_net']) / 1000),
             'LCOE Real ($/MWh)': out_merc['lcoe_real'] * 10,
             'LCOE Nominal ($/MWh)': out_merc['lcoe_nom'] * 10,
@@ -1130,9 +1134,9 @@ class SolarModel(BaseModel):
             'Land Purchase Cost ($)': self.LandCost,
             'Indirect Capital Cost ($)': self.IndirectCosts,
         }).round(2).reset_index().set_axis(['Metric', 'Value'], axis=1)
-
-        self.SolarWeightedAverage = gen.assign(Px=energy_prices).groupby('Year').apply(lambda x: numpy.average(x['Px'], weights=x['MW']), include_groups=False)
+        self.SolarWeightedAverage = gen.assign(Px=(energy_prices + cannib_prices)).groupby('Year').apply(lambda x: numpy.average(x['Px'], weights=x['MW']), include_groups=False)
         self.BaseLoadAverage = gen.assign(Px=energy_prices).groupby('Year')['Px'].apply(numpy.mean, include_groups=False)
+        self.CaptureRate = ((energy_prices * gen.MW).sum() / gen.MW.sum()) / energy_prices.mean()
         self.CaptureTable = pandas.concat([
             self.SolarWeightedAverage.to_frame('Solar Weighted Price'),
             self.BaseLoadAverage.to_frame('Average Price'),
@@ -1368,12 +1372,13 @@ class RunModel(BaseModel):
         # self.Models = [self.build_mode(i) for i in self.Locations]
         self.optimal_county()
         self.DF = self.build_dataframe()
+        self.MarketTrends = self.market_trends()
         self.execution_time_profile()
         self.S2 = datetime.datetime.now()
 
     def build_dataframe(self):
         cols = [
-            'Zone', 'Optimal', 'NPV', 'IRR', 'LCOEReal', 'LCOENom', 'PPAPrice', 'AverageDHI', 'AverageDNI', 'AverageMW',
+            'Zone', 'Optimal', 'NPV', 'IRR', 'LCOEReal', 'LCOENom', 'PPAPrice', 'CaptureRate', 'AverageGHI', 'AverageDHI', 'AverageDNI', 'AverageMW',
             'LandPrice', 'PropertyTax', '100_161_kV', '220_287_kV', '345_kV', '500_kV', 'Name', 'FIPS', 'Lat', 'Long'
         ]
         return pandas.DataFrame({col: [getattr(i, col) for i in self.Models] for col in cols}).round(2)
@@ -1386,6 +1391,16 @@ class RunModel(BaseModel):
         tab_data = self.OptimalCountySummary.round(2).to_dict('records')
         tab_cols = [{"name": str(i), "id": str(i), 'type': 'numeric', 'format': Format(group=',')} for i in self.OptimalCountySummary.columns]
         return tab_data, tab_cols
+
+    def market_trends(self):
+        return pandas.Series({
+            'Average NPV': numpy.max([i.NPV for i in self.Models]),
+            'Average IRR': numpy.mean([i.IRR for i in self.Models]),
+            'Average Capacity Factor': numpy.mean([i.CapacityFactor for i in self.Models]),
+            'Average LCOE Real': numpy.mean([i.LCOEReal for i in self.Models]),
+            'Average LCOE Nom': numpy.mean([i.LCOENom for i in self.Models]),
+            'Average Total Cost': numpy.mean([i.TotalInstalledCost for i in self.Models]),
+        })
 
     def execution_time_profile(self):
         models = {}
@@ -1717,11 +1732,44 @@ def setup_app(model):
             return [i for i in children if i['props']['label'] != name]
         return no_update
 
-    app.run_server(debug=True, use_reloader=False)
+    app.run_server(use_reloader=False)
 
 
 if __name__ == "__main__":
+    out =[]
     model = Models()
-    # model.RunModel.rebuild()
-    # self = model.RunModel.Models[0].SolarModel
     setup_app(model)
+    # model.RunModel.rebuild()
+
+    # model = Models()
+    # model.RunModel.rebuild()
+    # out = out + [(i.Zone, i.TotalRevenue, False, False) for i in model.RunModel.Models]
+    #
+    # model = Models()
+    # model.RunModel.RevenueModel.IncludeCannib = True
+    # model.RunModel.rebuild()
+    # out = out + [(i.Zone, i.TotalRevenue, True, False) for i in model.RunModel.Models]
+    #
+    # model = Models()
+    # model.RunModel.RevenueModel.IncludeCurtailment = True
+    # model.RunModel.rebuild()
+    # out = out + [(i.Zone, i.TotalRevenue, False, True) for i in model.RunModel.Models]
+    #
+    # model = Models()
+    # model.RunModel.RevenueModel.IncludeCurtailment = True
+    # model.RunModel.RevenueModel.IncludeCannib = True
+    # model.RunModel.rebuild()
+    # out = out + [(i.Zone, i.TotalRevenue, True, True) for i in model.RunModel.Models]
+
+    # model.RunModel.FinanceModel.FederalInvestmentTaxCredit = 0
+    # model.RunModel.rebuild()
+    # ptc = [(i.CapacityFactor, i.LCOEReal) for i in model.RunModel.Models]
+    #
+    # model = Models()
+    # model.RunModel.RevenueModel.FederalPTC = 0
+    # model.RunModel.FinanceModel.FederalInvestmentTaxCredit = 30
+    # model.RunModel.rebuild()
+    # itc = [(i.CapacityFactor, i.LCOEReal) for i in model.RunModel.Models]
+    #
+
+
