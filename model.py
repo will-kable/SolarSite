@@ -873,6 +873,7 @@ class WeatherModel(BaseModel):
         timezone, elevation = info['Local Time Zone'], info['Elevation']
         self.TimeZone = timezone[0]
         self.Elevation = elevation[0]
+        self.WeatherInfo = info
         df = pandas.read_csv(
             self.SolarResourceFile,
             skiprows=2,
@@ -957,7 +958,7 @@ class SolarModel(BaseModel):
 
         # Build the Solar Models
         gen = pandas.concat([df.assign(Year=year) for year in self.PeriodModel.Years])
-        idx = pandas.to_datetime(gen[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(f'Etc/GMT+{-self.WeatherModel.TimeZone}').dt.tz_convert('US/Central')
+        idx = pandas.to_datetime(gen[['Year', 'Month', 'Day', 'Hour']]).dt.tz_localize(f'Etc/GMT+{-self.WeatherModel.TimeZone}').dt.tz_convert('US/Eastern')
         gen = gen.assign(HourEnding=idx.dt.hour + 1).set_index(idx).sort_index().shift(freq='1h').assign(Gen=out_solar['gen'] * self.FinanceModel.Term)
 
         # Curtail the generation if turned on
@@ -1321,7 +1322,9 @@ class Models(BaseModel):
         super().__init__()
         self.Lats = COUNTIES['X (Lat)'].tolist()
         self.Longs = COUNTIES['Y (Long)'].tolist()
-        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)]
+        self.Lats = [37.271806]
+        self.Longs = [-83.212497]
+        self.Locations = [LocationModel(lat, long) for lat, long in zip(self.Lats, self.Longs)][:1]
         self.Zones = set([i.Zone for i in self.Locations])
         self.TimeZones = set([i.TimeZone for i in self.Locations])
         self.TechnologyModel = TechnologyModel()
@@ -1738,5 +1741,6 @@ def setup_app(model):
 if __name__ == "__main__":
     out =[]
     model = Models()
-    setup_app(model)
+    # setup_app(model)
+    model.RunModel.rebuild()
 

@@ -14,7 +14,7 @@ GEO_JSON = json.load(open('Config/geo_json.json'))
 
 PROP_TAXES = json.load(open('Config/property_tax.json'))
 
-API_KEY_NREL = 'me1DbZYqNf6JyoeT9XlnhQhHuzdjVsY4xbXzXzg0'
+API_KEY_NREL = ""
 
 TRANS_CORDS = pandas.read_csv("Config/transmission_coords_texas_ercot_only.csv")
 
